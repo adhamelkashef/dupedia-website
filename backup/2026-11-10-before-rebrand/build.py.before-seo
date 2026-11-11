@@ -1,0 +1,1508 @@
+"""Build the Dupedia website.
+
+    python3 src/build.py            -> writes public/ (deployable static site)
+
+No dependencies beyond the Python standard library. Content facts come from:
+  src/data/products.json   verified manufacturer data (codes, sizes, zones, ages), unchanged
+  src/config.json          business facts and integrations; null = not supplied yet ([TBC] on the page)
+Nothing is invented: missing facts are rendered as visible [TBC] placeholders and listed by the build.
+"""
+import hashlib, html, json, re, shutil, statistics, datetime, pathlib, sys
+from urllib.parse import quote
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+SRC, OUT, STATIC = ROOT / "src", ROOT / "public", ROOT / "static"
+D = json.loads((SRC / "data" / "products.json").read_text())
+CFG = json.loads((SRC / "config.json").read_text())
+COLL, P, FIN = D["collections"], D["products"], D["finishes"]
+NO_IMAGE = {"SW-A411"}   # the source serves another product's photograph for this one (see product_flags.json)
+REVIEW = not CFG.get("siteUrl")
+BASE = (CFG.get("siteUrl") or CFG["siteUrlPreview"]).rstrip("/")
+TODAY = datetime.date.today().isoformat()
+YEAR = datetime.date.today().year
+e = html.escape
+WARN = []
+
+# ------------------------------------------------------------------ helpers
+def slugify(s): return re.sub(r"[^a-z0-9]+", "-", s.lower().replace("&", "and").replace("'", "")).strip("-")
+for p in P:
+    p["slug"] = f'{p["code"].lower()}-{slugify(p["name"])}'
+    p["url"] = f'/playgrounds/{p["slug"]}/'
+    p["img"] = None if p["code"] in NO_IMAGE else f'/img/{p["code"].lower()}.webp'
+    p["thumb"] = None if p["code"] in NO_IMAGE else f'/img/{p["code"].lower()}-560.webp'
+BY = {p["code"]: p for p in P}
+CBY = {c["key"]: c for c in COLL}
+COUNT = len(P)
+CCOUNT = {c["key"]: sum(1 for p in P if p["collection"] == c["key"]) for c in COLL}
+
+def nb(t):
+    """Keep numbers with their units and L/W/H labels on one line."""
+    t = e(t)
+    t = re.sub(r"(^|\s)([LWH]) (?=\d)", lambda m: m.group(1) + m.group(2) + "&nbsp;", t)
+    return re.sub(r"(\d) (m²|m|cm)(?![\w])", lambda m: m.group(1) + "&nbsp;" + m.group(2), t)
+
+def tbc(label): return f'<span class="tbc" title="To be confirmed by Dupedia">[{e(label)} · TBC]</span>'
+
+ICON = {
+ "arrow": '<path d="M4 12h15"/><path d="m13 6 6 6-6 6"/>',
+ "download": '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M4 20h16"/>',
+ "dim": '<rect x="2" y="8" width="20" height="8" rx="1"/><path d="M6 8v3M10 8v4M14 8v3M18 8v4"/>',
+ "users": '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14a5 5 0 0 1 5 5"/>',
+ "safety": '<path d="M12 3 4 6v6c0 4.5 3.4 8 8 9 4.6-1 8-4.5 8-9V6z"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
+ "zone": '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 12h16M12 4v16"/>',
+ "plat": '<path d="M4 20h16"/><path d="M8 14h8v6"/><path d="M12 3v8"/><path d="m9 6 3-3 3 3"/>',
+ "plus": '<path d="M12 5v14M5 12h14"/>',
+ "phone": '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
+ "mail": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+ "pin": '<path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+ "plan": '<path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>',
+ "ruler": '<path d="M3 17 17 3l4 4L7 21z"/><path d="m7 13 2 2M10 10l2 2M13 7l2 2"/>',
+ "check": '<path d="m5 12 4.5 4.5L19 7"/>',
+ "chat": '<path d="M4 5h16v11H9l-5 4z"/>',
+ "doc": '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
+}
+def ic(name, cls="ic"): return f'<svg class="{cls}" viewBox="0 0 24 24" aria-hidden="true">{ICON[name]}</svg>'
+ARROW = ic("arrow", "ic ic-s")
+CUR, LAZY, FETCHHI = ' aria-current="page"', 'loading="lazy" ', 'fetchpriority="high"'
+
+# Division marks, built from the four blocks exactly as on brand board G4 (p.5).
+DIVISIONS = [
+ # key, anchor, name, short text (approved copy), colour, fg, cells, project type for the form
+ ("play", "playgrounds", "Outdoor playgrounds", "Play structures, swings and slides for parks, schools and compounds.", "#B8D241", "#262626", ['br100-tl', '', 'sq', 'br100-br'], "Outdoor playground"),
+ ("soft", "soft-play", "Indoor &amp; soft play", "Soft play frames and indoor play centres, designed to fit your space.", "#F2643D", "#262626", ['circle', 'circle', 'circle', ''], "Indoor & soft play"),
+ ("arcade", "arcades", "Arcades &amp; games", "Arcade machines and family entertainment centre fit-outs.", "#F7B32B", "#262626", ['sq', 'circle', 'sq', 'sq'], "Arcade / FEC"),
+ ("water", "water-parks", "Water parks", "Slides, splash pads and aquatic play for resorts and parks.", "#1E9FB0", "#262626", ['half-b', 'half-b', 'half-t', 'half-t'], "Water park"),
+ ("amuse", "amusement", "Amusement", "Rides and attractions for amusement parks and destinations.", "#6C5CE7", "#FFFFFF", ['br100-tl', 'br100-tr', 'sq', 'sq'], "Amusement attraction"),
+]
+RAD = {"": None, "sq": "0", "circle": "50%", "br100-tl": "100% 0 0 0", "br100-tr": "0 100% 0 0",
+       "br100-br": "0 0 100% 0", "half-b": "0 0 999px 999px", "half-t": "999px 999px 0 0"}
+def mark(key, size=None):
+    d = next(x for x in DIVISIONS if x[0] == key)
+    inner = "".join(f'<i style="background:{d[5]};border-radius:{RAD[c]}"></i>' if c else "<i></i>" for c in d[6])
+    st = f"background:{d[4]}" + (f";--dm:{size}px" if size else "")
+    return f'<span class="dmark" style="{st}" aria-hidden="true">{inner}</span>'
+
+def block_band(spec, cls="", size=None):
+    """spec: list of (shape, colour) where shape in sq, qt, qt-r, hf, ht, ci, gap."""
+    col = {"c": "var(--text)", "l": "var(--lime)", "w": "var(--white)", "s": "var(--stone)", "cr": "var(--cream)"}
+    blocks = "".join(f'<span class="blk {s}" style="--c:{col.get(c, c)};--i:{i}"></span>' for i, (s, c) in enumerate(spec))
+    st = f' style="--b:{size}"' if size else ""
+    return f'<div class="block-band {cls}" aria-hidden="true"{st}>{blocks}</div>'
+BAND_MAIN = [("sq", "c"), ("qt", "l"), ("ht", "c"), ("ci", "l"), ("sq", "c"), ("hf", "l")]
+
+def hline(text, tag="h1", cls="h1", id_=None, start=0):
+    """Headline split into lines for the masked line-up animation. Lines separated by |."""
+    lines = text.split("|")
+    inner = " ".join(f'<span class="ln"><span style="--i:{start + i}">{ln.strip()}</span></span>' for i, ln in enumerate(lines))
+    idattr = f' id="{id_}"' if id_ else ""
+    return f'<{tag} class="{cls}"{idattr}>{inner}</{tag}>'
+
+# ------------------------------------------------------------------ geometry (for server-rendered figures)
+def nums(s): return [float(x) for x in re.findall(r"\d+(?:\.\d+)?", s or "")]
+def zone_of(p):
+    s = p["safetyZone"] or ""
+    if re.search(r"plan|config|segment", s, re.I) or not s: return ("plan",)
+    n = nums(s)
+    if "m²" in s: return ("area", n[0])
+    return ("rect", n[0], n[1]) if len(n) >= 2 else ("plan",)
+def dims_of(p):
+    n = nums(p["dimensions"])
+    if len(n) < 2: return None
+    k = 0.01 if re.search(r"\bcm\b", p["dimensions"]) else 1
+    return (n[0] * k, n[1] * k)
+
+def plan_svg(zl, zw, dl, dw, title, label_zone=True):
+    VW, VH, pad = 400, 300, 40
+    s = min((VW - 2 * pad) / max(zl, dl), (VH - 2 * pad) / max(zw, dw))
+    cx, cy = VW / 2, VH / 2
+    def r(l, w, extra): return f'<rect x="{cx - l*s/2:.1f}" y="{cy - w*s/2:.1f}" width="{l*s:.1f}" height="{w*s:.1f}" {extra}/>'
+    lab = lambda x, y, t, a="middle": f'<text class="p-lab" x="{x:.1f}" y="{y:.1f}" text-anchor="{a}">{e(t)}</text>'
+    g = r(zl, zw, 'class="p-zone"')
+    g += r(dl, dw, 'class="p-prod"')
+    if label_zone:
+        g += lab(cx, cy - zw * s / 2 - 10, f"Safety zone {zl:.2f} × {zw:.2f} m")
+        g += lab(cx, cy + zw * s / 2 + 20, f"Footprint {dl:.2f} × {dw:.2f} m")
+    return f'<svg viewBox="0 0 {VW} {VH}" role="img" aria-label="{e(title)}">{g}</svg>'
+
+# ------------------------------------------------------------------ assets
+def ver(path): return hashlib.sha1(path.read_bytes()).hexdigest()[:10]
+CSS_V = ver(SRC / "assets" / "site.css"); JS_V = ver(SRC / "assets" / "site.js"); MO_V = ver(SRC / "assets" / "motion.js")
+
+# Intro loader: first visit per browser session, skipped with reduced motion. The inline script decides before
+# first paint; a timer clears it even if the main scripts fail to load.
+INTRO_JS = ("try{if(!sessionStorage.getItem('dp-intro')&&!matchMedia('(prefers-reduced-motion: reduce)').matches){"
+            "document.documentElement.classList.add('intro');setTimeout(function(){document.documentElement.classList.remove('intro')},9000)}}catch(e){}")
+LOADER_HTML = '''<div class="loader" role="dialog" aria-label="Loading Dupedia" aria-live="polite">
+  <div class="loader-top"><img src="/brand/dupedia-logo-white.png" width="1570" height="346" alt="Dupedia"><button type="button" class="loader-skip">Skip intro</button></div>
+  <div class="loader-stage"><div class="loader-cluster" aria-hidden="true">
+    <i style="--c:var(--cream)"></i><i style="--c:var(--lime);--r:100% 0 0 0"></i><i style="--c:var(--lime);--r:50%"></i><i style="--c:var(--cream);--r:999px 999px 0 0"></i>
+  </div></div>
+  <div class="loader-bottom">
+    <p class="loader-count" aria-hidden="true"><b>000</b><small>%</small></p>
+    <div class="loader-line"><span>Serious about <em>play.</em></span><span class="hint">Move, or click to play with the blocks</span></div>
+  </div>
+  <span class="loader-bar" aria-hidden="true"></span>
+</div>
+<div class="loader-curtain" aria-hidden="true"></div>
+'''
+
+def catalog_js():
+    data = {
+        "collections": [{k: c[k] for k in ("key", "numeral", "name", "short", "description")} for c in COLL],
+        "products": [{"code": p["code"], "name": p["name"], "coll": p["collection"], "dims": p["dimensions"], "zone": p["safetyZone"],
+                      "age": p["age"], "amin": p.get("ageMin") or 0, "amax": p.get("ageMax") or 99, "thumb": p["thumb"], "url": p["url"]} for p in P],
+    }
+    return "window.DP_CATALOG=" + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + ";\n"
+
+FONTS = ("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,500..600,100;1,9..144,500,100"
+         "&family=Instrument+Sans:wght@400;500;600&display=swap")
+FONT_AR = "https://fonts.googleapis.com/css2?family=Readex+Pro:wght@400;500;600&display=swap"  # loaded on /ar/ pages only (build_ar.py)
+FONT_SIG = "https://fonts.googleapis.com/css2?family=Herr+Von+Muellerhoff&display=swap&text=" + quote("Adham El Kashef")
+
+ORG = {
+    "@type": "Organization", "@id": BASE + "/#org", "name": "Dupedia", "url": BASE + "/",
+    "logo": BASE + "/brand/dupedia-logo-black.png", "foundingDate": "1989", "slogan": "Serious about play.",
+    "founder": {"@type": "Person", "name": "Adham El Kashef", "jobTitle": "Founder & CEO"},
+    "description": "Dupedia designs, supplies and installs places to play: playgrounds, soft play, arcades, water parks and amusement attractions, for developers, hotels, schools, malls and operators.",
+    "areaServed": [{"@type": "Country", "name": c} for c in CFG.get("serviceArea", [])],
+    "knowsAbout": ["Playground design", "Playground equipment supply and installation", "Soft play", "Water parks", "Family entertainment centres", "Amusement attractions"],
+}
+if CFG["contact"].get("email"): ORG["email"] = CFG["contact"]["email"]
+if CFG["contact"].get("phone"): ORG["telephone"] = CFG["contact"]["phone"]
+same = [v for v in CFG["social"].values() if v]
+if same: ORG["sameAs"] = same
+
+def crumbs_ld(items):
+    return {"@type": "BreadcrumbList", "itemListElement": [
+        {"@type": "ListItem", "position": i + 1, "name": n, "item": BASE + u} for i, (n, u) in enumerate(items)]}
+
+# ------------------------------------------------------------------ layout
+NAV = [("Playgrounds", "/playgrounds/"), ("What we build", "/what-we-build/"), ("Our factory", "/our-factory/"), ("Who we work with", "/who-we-work-with/"),
+       ("Planning guide", "/planning-guide/"), ("About", "/about/")]
+
+def header(active):
+    links = "".join(f'<a href="{u}"{CUR if active == u else ""}>{n}</a>' for n, u in NAV)
+    sheet_links = "".join(f'<a href="{u}"{CUR if active == u else ""}>{n}{ARROW}</a>' for n, u in NAV + [("Contact", "/contact/")])
+    return f'''<a class="skip" href="#main">Skip to content</a>
+<header class="hdr">
+  <div class="wrap hdr-in">
+    <a class="hdr-logo" href="/" aria-label="Dupedia home"><img src="/brand/dupedia-logo-white.png" width="1570" height="346" alt="Dupedia"></a>
+    <nav class="nav" aria-label="Main">{links}</nav>
+    <div class="hdr-act">
+      <a class="sl-pill" href="/contact/" data-sl-count hidden><span class="ball" aria-hidden="true"></span>Shortlist <span class="n">0</span></a>
+      <a class="btn btn-s" href="/contact/">Request a quote</a>
+      <button class="burger" type="button" aria-expanded="false" aria-controls="sheet" aria-label="Open menu"><span></span><span></span><span></span></button>
+    </div>
+  </div>
+</header>
+<div class="sheet" id="sheet" hidden>
+  <nav aria-label="Menu">{sheet_links}</nav>
+  <div class="sheet-cta"><a class="btn" href="/contact/">Request a quote</a></div>
+  {block_band(BAND_MAIN, size="34px")}
+</div>'''
+
+def contact_line(kind):
+    c = CFG["contact"]
+    if kind == "phone": return f'<a href="tel:{e(c["phone"])}">{e(c["phone"])}</a>' if c.get("phone") else tbc("Phone")
+    if kind == "whatsapp": return f'<a href="https://wa.me/{re.sub(r"[^0-9]", "", c["whatsapp"])}">{e(c["whatsapp"])}</a>' if c.get("whatsapp") else tbc("WhatsApp")
+    if kind == "email": return f'<a href="mailto:{e(c["email"])}">{e(c["email"])}</a>' if c.get("email") else tbc("Email")
+    if kind == "address": return e(c["address"]) if c.get("address") else tbc("Office address")
+    return ""
+
+def footer():
+    colls = "".join(f'<li><a href="/playgrounds/?c={c["key"]}">{e(c["short"])}</a></li>' for c in COLL)
+    social = "".join(f'<li><a href="{e(u)}" rel="me noopener">{k.title()}</a></li>' for k, u in CFG["social"].items() if u) or f"<li>{tbc('Social links')}</li>"
+    return f'''<footer class="ftr">
+  <div class="wrap">
+    <div class="ftr-grid">
+      <div class="ftr-brand">
+        <img src="/brand/dupedia-logo-white.png" width="1570" height="346" alt="Dupedia" loading="lazy">
+        <p class="brandline"><span>Serious about <em>play.</em></span></p>
+      </div>
+      <div><h2>Explore</h2><ul>{"".join(f'<li><a href="{u}">{n}</a></li>' for n, u in NAV)}<li><a href="/contact/">Contact</a></li></ul></div>
+      <div><h2>Playground collections</h2><ul>{colls}<li><a href="/downloads/dupedia-playground-catalogue.pdf">Catalogue (PDF, 7&nbsp;MB)</a></li></ul></div>
+      <div><h2>Contact</h2><ul><li><a href="/contact/">Request a quote</a></li><li>{contact_line("email")}</li><li>{contact_line("phone")}</li><li>{contact_line("address")}</li>{social}</ul></div>
+    </div>
+    {block_band(BAND_MAIN)}
+    <div class="ftr-base"><span>© {YEAR} Dupedia. All rights reserved.</span><span>Product data as published by the manufacturer, October 2026 · <a href="/privacy/">Privacy</a></span></div>
+  </div>
+</footer>'''
+
+def cta_band(title="Tell us about your <em>space.</em>", text="Share the basics and your shortlist. The Dupedia team replies using the details you give.", primary=("Request a quote", "/contact/"), secondary=("Download the catalogue", "/downloads/dupedia-playground-catalogue.pdf")):
+    return f'''<section class="sec band-dark cta-band" aria-labelledby="cta-t">
+  <span class="corner-mark" aria-hidden="true"></span>
+  <div class="wrap">
+    <p class="eyebrow dot" data-reveal>Let’s build something</p>
+    <h2 class="cta-big" id="cta-t" data-reveal style="margin-top:24px">{title}</h2>
+    <div class="cta-grid">
+      <p class="lede" data-reveal>{text}</p>
+      <div class="actions" data-reveal style="--rd:1"><a class="btn btn-lime btn-xl" href="{primary[1]}" data-magnetic>{primary[0]} {ARROW}</a><a class="btn btn-ghost btn-xl" href="{secondary[1]}" data-magnetic>{secondary[0]}</a></div>
+    </div>
+  </div>
+</section>'''
+
+PAGES = []  # (path, priority)
+
+def page(path, title, desc, body, active=None, ld=None, catalog=False, og_image=None, robots=None, crumbs=None, lang="en", intro=False):
+    """Write one page. path like '/playgrounds/' or '/404.html'."""
+    url = BASE + path
+    graph = [ORG] + (ld or [])
+    if crumbs: graph.append(crumbs_ld(crumbs))
+    ldjson = json.dumps({"@context": "https://schema.org", "@graph": graph}, ensure_ascii=False).replace("</", "<\\/")
+    img = BASE + (og_image or "/og/dupedia-og.jpg")
+    rob = robots or ("noindex, nofollow" if REVIEW else "index, follow, max-image-preview:large")
+    cfg = {"formEndpoint": CFG.get("formEndpoint") or "", "email": CFG["contact"].get("email") or "", "whatsapp": CFG["contact"].get("whatsapp") or ""}
+    full_title = title if "Dupedia" in title else f"{title} · Dupedia"
+    doc = f'''<!doctype html>
+<html lang="{lang}" dir="{"rtl" if lang == "ar" else "ltr"}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{e(full_title)}</title>
+<meta name="description" content="{e(desc)}">
+<link rel="canonical" href="{url}">
+<meta name="robots" content="{rob}">
+<meta name="theme-color" content="#1B1B19">
+<meta property="og:type" content="{"product" if "/playgrounds/sw-" in path else "website"}">
+<meta property="og:site_name" content="Dupedia">
+<meta property="og:locale" content="en_EG">
+<meta property="og:title" content="{e(full_title)}">
+<meta property="og:description" content="{e(desc)}">
+<meta property="og:url" content="{url}">
+<meta property="og:image" content="{img}">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/icon-512.png" type="image/png" sizes="512x512">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="{FONTS}">
+<link rel="stylesheet" href="{FONT_SIG}">
+<link rel="stylesheet" href="/assets/site.css?v={CSS_V}">
+<script>document.documentElement.classList.add("js");window.DP_CONFIG={json.dumps(cfg)};{INTRO_JS if intro else ""}</script>
+{'<script src="/assets/catalog.js?v=' + CAT_V + '" defer></script>' if catalog else ""}
+<script src="/assets/site.js?v={JS_V}" defer></script>
+<script src="/assets/motion.js?v={MO_V}" defer></script>
+<script type="application/ld+json">{ldjson}</script>
+</head>
+<body>
+{LOADER_HTML if intro else ""}{header(active)}
+<main id="main">
+{body}
+</main>
+{footer()}
+</body>
+</html>
+'''
+    dest = OUT / (path.lstrip("/") + ("index.html" if path.endswith("/") else ""))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(doc)
+    if robots is None: PAGES.append(path)
+
+# ------------------------------------------------------------------ components
+def product_card(p, lazy=True, heading="h3"):
+    c = p["code"].lower()
+    new = '<span class="tag">New 2026</span>' if p.get("isNew") else ""
+    if p["thumb"]:
+        media = (f'<img src="{p["thumb"]}" srcset="{p["thumb"]} 560w, {p["img"]} 1100w" sizes="(max-width: 640px) 92vw, (max-width: 1100px) 46vw, 30vw" '
+                 f'width="560" height="350" {LAZY if lazy else ""}decoding="async" alt="{e(p["name"])} ({p["code"]}), product visual" style="view-transition-name:pv-{c}">')
+    else:
+        media = '<span class="noimg">Photograph to follow</span>'
+    return f'''<li class="card" data-code="{p["code"]}" data-coll="{p["collection"]}">
+  <a href="{p["url"]}">
+    <span class="media">{media}{new}</span>
+    <span class="body">
+      <span class="code">{p["code"]} · {e(CBY[p["collection"]]["short"])}</span>
+      <{heading} class="nm">{e(p["name"])}</{heading}>
+      <span class="meta"><span>{nb(p["dimensions"])}</span><span>{e(p["age"])}</span></span>
+      <span class="fitflag" hidden></span>
+    </span>
+  </a>
+  <button class="sl-btn" type="button" data-sl="{p["code"]}" data-name="{e(p["name"])}" aria-pressed="false" aria-label="Add {e(p["name"])} to shortlist">{ic("plus")}</button>
+</li>'''
+
+def phero(eyebrow, title, lede, crumbs=None, actions="", corner="var(--lime)"):
+    cr = ""
+    if crumbs:
+        cr = '<nav aria-label="Breadcrumb"><ol class="crumbs">' + "".join(
+            f'<li><a href="{u}">{n}</a></li>' if i < len(crumbs) - 1 else f'<li aria-current="page">{n}</li>' for i, (n, u) in enumerate(crumbs)) + "</ol></nav>"
+    return f'''<section class="phero">
+  <span class="corner-mark sweep" style="--c:{corner}" aria-hidden="true"></span>
+  <div class="wrap">
+    {cr}
+    <p class="eyebrow">{eyebrow}</p>
+    {hline(title)}
+    <p class="lede">{lede}</p>
+    {f'<div class="phero-act">{actions}</div>' if actions else ""}
+  </div>
+</section>'''
+
+# ------------------------------------------------------------------ data-derived facts
+Y301 = BY["SW-Y301"]
+_dz = zone_of(Y301); _dd = dims_of(Y301)
+Y_FOOT, Y_ZONE = _dd[0] * _dd[1], _dz[1] * _dz[2]
+Y_RATIO = Y_ZONE / Y_FOOT   # 43.2 / 5.56 = 7.8
+
+def coll_stats():
+    rows = []
+    for c in COLL:
+        ps = [p for p in P if p["collection"] == c["key"]]
+        rect = [(p, zone_of(p), dims_of(p)) for p in ps]
+        rect = [(p, z, d) for p, z, d in rect if z[0] == "rect" and d and z[1] * z[2] >= d[0] * d[1]]  # skip zones smaller than the footprint (source data to confirm)
+        if not rect: continue
+        ratios = [z[1] * z[2] / (d[0] * d[1]) for p, z, d in rect]
+        small = min(rect, key=lambda x: x[1][1] * x[1][2]); large = max(rect, key=lambda x: x[1][1] * x[1][2])
+        rows.append((c, len(ps), len(rect), small, large, statistics.median(ratios)))
+    return rows
+_excl = [p for p in P if zone_of(p)[0] == "rect" and dims_of(p) and zone_of(p)[1] * zone_of(p)[2] < dims_of(p)[0] * dims_of(p)[1]]
+EXCL_NOTE = ('<p class="source-note" style="margin-top:14px">Left out: ' + "; ".join(f'{e(p["name"])} ({p["code"]})' for p in _excl) +
+             '. The published zone is smaller than the published footprint, so the figures need confirming with the manufacturer.</p>') if _excl else ""
+ZKIND = {"rect": 0, "area": 0, "plan": 0}
+for p in P: ZKIND[zone_of(p)[0]] += 1
+
+# ------------------------------------------------------------------ pages
+
+def clients_band(title_id="cl-t"):
+    """Two rows of client names moving in opposite directions. Names as published on soliwood.org (7 Nov 2026)."""
+    names = D.get("clients") or []
+    if not names: return ""
+    if CFG.get("clientsCredit") == "dupedia":
+        eyebrow, title = "Clients", "Trusted at Egypt’s landmark <em>addresses.</em>"
+        note = ""
+    else:
+        eyebrow, title = "Our outdoor range, already in place", "Built by Soliwood for Egypt’s landmark <em>addresses.</em>"
+        note = '<p class="source-note" style="margin-top:20px">Clients of Soliwood, the Cairo manufacturer of our outdoor playground range, as listed on soliwood.org.</p>'
+    half = (len(names) + 1) // 2
+    def row(ns, rev):
+        one = "".join(f'<span>{e(n)}<i class="mk" style="border-radius:{["0","100% 0 0 0","50%","999px 999px 0 0"][k % 4]}"></i></span>' for k, n in enumerate(ns))
+        return f'<div class="marquee-track" data-rev="{1 if rev else 0}">{one * 4}</div>'
+    return f'''<section class="clients" aria-labelledby="{title_id}">
+  <div class="wrap"><p class="eyebrow dot" data-reveal>{eyebrow}</p><h2 class="h3" id="{title_id}" data-reveal style="margin-top:14px">{title}</h2></div>
+  <div class="clients-rows" aria-hidden="true">{row(names[:half], False)}{row(names[half:], True)}</div>
+  <ul class="sr">{"".join(f"<li>{e(n)}</li>" for n in names)}</ul>
+  <div class="wrap">{note}</div>
+</section>'''
+
+
+def swing_section():
+    """Editorial photo hung like a swing: it rocks with scroll and when the pointer pushes it (motion.js)."""
+    return f'''<section class="sec swing" aria-labelledby="sw-t">
+  <span class="swing-ball" aria-hidden="true"></span>
+  <div class="wrap swing-grid">
+    <div class="swing-copy">
+      <p class="eyebrow dot" data-reveal>Why we do it</p>
+      <h2 class="h1" id="sw-t" data-reveal style="margin-top:20px">Every size, code and safety zone we publish is for <em>this.</em></h2>
+      <p class="lede" data-reveal style="margin-top:24px">The measuring, the drawings and the checks happen so that, on opening day, the only thing anyone notices is the play.</p>
+      <div class="phero-act" data-reveal><a class="btn" href="/contact/" data-magnetic>Start your project {ARROW}</a><a class="link" href="/playgrounds/">See the swings and towers {ARROW}</a></div>
+    </div>
+    <div class="swing-stage" data-cursor="Push">
+      <div class="swing-rig">
+        <span class="rope l" aria-hidden="true"></span><span class="rope r" aria-hidden="true"></span>
+        <figure class="swing-photo"><img src="/img/home-swings.jpg" srcset="/img/home-swings-480.jpg 404w, /img/home-swings.jpg 735w, /img/home-swings-1470.jpg 1470w" sizes="(max-width: 900px) 86vw, 40vw" width="1470" height="1744" loading="lazy" decoding="async" alt="Black-and-white photograph of two laughing girls on rope swings in a city courtyard."></figure>
+      </div>
+    </div>
+  </div>
+</section>'''
+
+DIV_IMG = {
+    "play": ("/img/div-playgrounds.webp", 1024, 1024, "A child climbing a wooden play tower with a green slide and swings on a lawn."),
+    "soft": ("/img/div-soft-play.webp", 701, 438, "An indoor soft play centre with slides, a ball pit and neon-lit climbing frames."),
+    "arcade": ("/img/div-arcades.webp", 768, 1024, "A family entertainment centre with brightly lit arcade and prize machines."),
+    "water": ("/img/div-water-parks.webp", 452, 678, "A water play structure with slides and a splash pool at a resort water park."),
+    "amuse": ("/img/div-amusement.webp", 1400, 935, "A swing ride lit up at dusk in an amusement park."),
+}
+def div_img(k, sizes="40vw", cls=""):
+    src, w, h, alt = DIV_IMG[k]
+    return f'<img src="{src}" width="{w}" height="{h}" sizes="{sizes}" alt="{alt}" loading="lazy" decoding="async"{(" class=" + chr(34) + cls + chr(34)) if cls else ""}>'
+
+PLAY_BLOCKS = [("square", "var(--cream)", "0"), ("quarter", "var(--lime)", "100% 0 0 0"), ("circle", "var(--coral)", "50%"),
+               ("square", "var(--sun)", "0"), ("half", "var(--lagoon)", "999px 999px 0 0"), ("half", "var(--iris)", "999px 999px 0 0"),
+               ("circle", "var(--lime)", "50%"), ("half", "var(--cream)", "0 0 999px 999px"), ("quarter", "var(--cream)", "100% 0 0 0"), ("square", "var(--lime)", "0")]
+
+def words(segments):
+    """[(text, is_accent)] -> spans per word for the scroll-lit statement."""
+    out = []
+    for text, accent in segments:
+        w = " ".join(f'<span class="w">{x}</span>' for x in text.split())
+        out.append(f"<em>{w}</em>" if accent else w)
+    return " ".join(out)
+
+def ecosystem_section():
+    return f'''<section class="sec ecosystem" id="ecosystem" aria-labelledby="eco-t">
+  <div class="wrap">
+    <div class="sec-head"><div><p class="eyebrow dot">The Dupedia ecosystem</p><h2 class="h2" id="eco-t">Distinct expertise.<br><em>Shared vision.</em></h2></div><p>Dupedia brings together a group of companies with specialist expertise in play, leisure and craftsmanship. Meet the brands in our ecosystem.</p></div>
+    <div class="ecosystem-grid">
+      <a class="ecosystem-card" href="https://trueslate-eg.com/" target="_blank" rel="noopener noreferrer" aria-label="Visit True Slate — opens in a new tab">
+        <div class="ecosystem-logo"><img src="/brand/trueslate-logo.svg" width="896" height="170" alt="TRUE SLATE" loading="lazy"></div>
+        <div class="ecosystem-info"><div><h3>True Slate</h3><p>Billiard tables crafted on genuine slate.</p></div><span class="ecosystem-go" aria-hidden="true">↗</span></div>
+        <span class="ecosystem-url" dir="ltr">trueslate-eg.com</span>
+      </a>
+      <a class="ecosystem-card" href="https://soliwood.org/" target="_blank" rel="noopener noreferrer" aria-label="Visit Soliwood — opens in a new tab">
+        <div class="ecosystem-logo"><img src="/brand/soliwood-logo.png" width="1005" height="296" alt="Soliwood" loading="lazy"></div>
+        <div class="ecosystem-info"><div><h3>Soliwood</h3><p>Wooden playgrounds and crafted play environments.</p></div><span class="ecosystem-go" aria-hidden="true">↗</span></div>
+        <span class="ecosystem-url" dir="ltr">soliwood.org</span>
+      </a>
+      <div class="ecosystem-card is-static">
+        <div class="ecosystem-logo eco-s89"><img src="/brand/studio-eighty-nine-logo.png" width="1000" height="472" alt="Studio Eighty Nine, design studio, established 2024" loading="lazy"></div>
+        <div class="ecosystem-info"><div><h3>Studio Eighty Nine</h3><p>Specialists in urban outdoor furniture.</p></div></div>
+        <span class="ecosystem-url">Website coming soon</span>
+      </div>
+    </div>
+  </div>
+</section>'''
+
+def build_home():
+    blocks = "".join(f'<button type="button" class="pb" style="--c:{c};--r:{r}" aria-label="{n.title()} block {i + 1}. Drag or use the arrow keys to move it; press Enter to turn it."><i></i></button>'
+                     for i, (n, c, r) in enumerate(PLAY_BLOCKS))
+    hero = f'''<section class="hero" aria-labelledby="hero-t">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow dot">Design · supply · installation · Egypt · since 1989</p>
+      {hline("Places people|<em>love</em> to play.", cls="display", id_="hero-t")}
+      <p class="lede">Playgrounds, soft play, arcades, water parks and amusement attractions for developers, hotels, schools, malls and operators, built to be safe, look good and last.</p>
+      <div class="hero-cta"><a class="btn" href="/contact/" data-magnetic>Request a quote {ARROW}</a><a class="link" href="#fit">Check what fits your space {ARROW}</a></div>
+      <p class="brandline"><span>Serious about <em>play.</em></span></p>
+    </div>
+    <div class="play-wrap">
+      <div class="play" role="group" aria-label="Building blocks to play with">
+        <div class="play-field">{blocks}</div>
+      </div>
+      <div class="play-bar"><p id="play-hint" aria-live="polite">Drag the blocks. They snap, like play parts from one mould.</p>
+        <button type="button" id="play-shuffle"><svg class="ic ic-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>Rearrange</button></div>
+    </div>
+  </div>
+  <a class="hero-scroll" href="#div-t"><i aria-hidden="true"></i>Scroll</a>
+</section>'''
+
+    mq_items = ["Outdoor playgrounds", "Soft play", "Arcades &amp; games", "Water parks", "Amusement", "<em>Serious about play.</em>"]
+    mq_one = "".join(f'<span>{x}<i class="mk" style="border-radius:{["0","100% 0 0 0","50%","999px 999px 0 0","0 0 999px 999px","50%"][k]}"></i></span>' for k, x in enumerate(mq_items))
+    marquee = f'<div class="marquee" aria-hidden="true"><div class="marquee-track">{mq_one}{mq_one}{mq_one}{mq_one}</div></div>'
+
+    stmt = words([("We design, supply and install places to play: playgrounds, soft play, arcades, water parks and amusement attractions, for the developers, hotels, schools, malls and operators who need them to be", False),
+                  ("safe, look good and last.", True)])
+    statement = f'''<section class="sec" id="what-we-do" aria-labelledby="wwd-t">
+  <div class="wrap">
+    <h2 class="eyebrow dot" id="wwd-t" data-reveal>What we do</h2>
+    <p class="stmt" style="margin-top:28px">{stmt}</p>
+    <div class="facts" style="padding-bottom:0"><div class="facts-in">
+      <div data-reveal><b class="lime">1989</b><span>Building places to play since</span></div>
+      <div data-reveal style="--rd:1"><b data-count="5">5</b><span>Divisions, one team</span></div>
+      <div data-reveal style="--rd:2"><b data-count="{COUNT}">{COUNT}</b><span>Outdoor playground products, each fully specified</span></div>
+      <div data-reveal style="--rd:3"><b data-count="{len(COLL)}">{len(COLL)}</b><span>Collections, from toddler houses to landmark play landscapes</span></div>
+    </div></div>
+  </div>
+</section>'''
+
+    showcase = f'''<section class="showcase band-dark" aria-labelledby="sc-t">
+  <div class="showcase-pin">
+    <figure class="showcase-fig"><img src="/img/showcase-fun.webp" srcset="/img/showcase-fun-700.webp 700w, /img/showcase-fun.webp 1140w" sizes="100vw" width="1140" height="800" alt="Children climbing a bright red play structure of giant rings and rope nets on a sunny day." data-preload decoding="async"></figure>
+    <p class="showcase-label eyebrow">Keep scrolling</p>
+    <div class="showcase-cap">
+      <div><span class="code">Creating fun spaces since 1989</span><h2 class="h2" id="sc-t">Where every space learns to <em>play.</em></h2></div>
+      <a class="btn" href="/what-we-build/" data-magnetic>See what we build {ARROW}</a>
+    </div>
+  </div>
+</section>'''
+
+    panels = ""
+    for i, (k, anchor, name, text, col, fg, cells, ptype) in enumerate(DIVISIONS):
+        href = "/playgrounds/" if k == "play" else f"/what-we-build/#{anchor}"
+        status = f"{COUNT} products, fully specified" if k == "play" else "Range on request"
+        media = div_img(k)
+        media += f'<span class="hs-mark">{mark(k, 52)}</span>'
+        panels += f'''<a class="hs-panel dmark-hover" href="{href}" data-k="{k}" style="--c:{col}" data-cursor="Explore">
+  <span class="hs-media">{media}</span>
+  <span class="hs-body"><span class="hs-num">0{i + 1}</span><h3>{name}</h3><p>{text}</p><span class="status">{status}<span class="go">{ARROW}</span></span></span>
+</a>'''
+    divisions = f'''<section class="hs" aria-labelledby="div-t">
+  <div class="hs-pin">
+    <div class="wrap sec-head" style="margin-bottom:0"><div><p class="eyebrow dot">What we build</p><h2 class="h2" id="div-t">Five kinds of place to <em>play.</em></h2></div><p>One team from the first sketch to handover, whether the brief is a school yard, a compound park, a mall play centre or a resort water area.</p></div>
+    <div class="hs-track">{panels}</div>
+    <div class="hs-foot"><div class="hs-progress"><i></i></div><span class="hs-count">01 / 05</span></div>
+  </div>
+</section>'''
+
+    ages = "".join(f'<button type="button" data-age="{a}" aria-pressed="{"true" if a == 0 else "false"}">{"Any age" if a == 0 else f"Age {a}"}</button>' for a in (0, 3, 5, 8, 12))
+    fit = f'''<section class="sec sec-white" id="fit" aria-labelledby="fit-t">
+  <div class="wrap fit" data-fit-tool>
+    <div>
+      <p class="eyebrow dot" data-reveal>Will it fit?</p>
+      <h2 class="h2" id="fit-t" data-reveal style="margin-top:16px">Start with your <em>space.</em></h2>
+      <p class="lede" data-reveal style="margin-top:20px">Every product in our outdoor range comes with its published safety zone: the free area the layout must keep around it. Set your space and see what fits, in either orientation.</p>
+      <div class="fit-panel" data-reveal style="margin-top:32px">
+        <div class="fit-fields">
+          <div class="range"><div class="range-top"><label for="fit-l">Length</label><span class="range-val"><input id="fit-l" type="number" inputmode="decimal" min="1" max="200" step="0.5" value="15" aria-describedby="fit-sub"><span>m</span></span></div>
+            <input id="fit-lr" type="range" min="3" max="40" step="0.5" value="15" aria-label="Length in metres" tabindex="-1"></div>
+          <div class="range"><div class="range-top"><label for="fit-w">Width</label><span class="range-val"><input id="fit-w" type="number" inputmode="decimal" min="1" max="200" step="0.5" value="10" aria-describedby="fit-sub"><span>m</span></span></div>
+            <input id="fit-wr" type="range" min="3" max="40" step="0.5" value="10" aria-label="Width in metres" tabindex="-1"></div>
+          <div class="range"><span class="range-top"><span class="lbl" id="age-l">Children’s age</span></span><div class="seg" role="group" aria-labelledby="age-l">{ages}</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="fit-out" data-reveal style="--rd:1">
+      <div class="fit-count" aria-live="polite"><b id="fit-n">0</b><span id="fit-sub">Calculating what fits…</span></div>
+      <figure class="fit-stage mask-br"><svg id="fit-svg" viewBox="0 0 400 300" role="img" aria-labelledby="fit-cap"></svg></figure>
+      <div class="plan-key"><span><i class="k-site"></i>Your space</span><span><i class="k-zone"></i>Safety zone</span><span><i class="k-prod"></i>Product footprint</span></div>
+      <p class="fit-note" id="fit-cap"></p>
+      <div class="fit-list" id="fit-list"></div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center">
+        <a class="btn" id="fit-more" href="/playgrounds/?fit=1" data-magnetic>See everything that fits {ARROW}</a>
+        <a class="link" href="/contact/">Send us your plan {ARROW}</a>
+      </div>
+      <p class="fit-note">A geometry check against the manufacturer’s published figures, not a safety certification. We review every layout before quoting.</p>
+    </div>
+  </div>
+</section>'''
+
+
+    z = zone_of(Y301); d = dims_of(Y301)
+    insight = f'''<section class="sec band-lime" aria-labelledby="ins-t">
+  <div class="wrap insight">
+    <div>
+      <p class="big-num" data-reveal>{Y_RATIO:.1f}<em>×</em></p>
+      <h2 class="h2" id="ins-t" data-reveal style="margin-top:28px">A play unit needs more space than it <em>takes up.</em></h2>
+      <p class="lede" data-reveal style="margin-top:18px">{e(Y301["name"])} ({Y301["code"]}) stands on {d[0]:.2f} × {d[1]:.2f}&nbsp;m, about {Y_FOOT:.1f}&nbsp;m². Its published safety zone is {z[1]:.2f} × {z[2]:.2f}&nbsp;m, about {Y_ZONE:.0f}&nbsp;m². Plan the zone first and the layout follows.</p>
+      <p data-reveal style="margin-top:28px"><a class="link" href="/planning-guide/">Read the planning guide {ARROW}</a></p>
+    </div>
+    <figure class="insight-fig mask-tr" data-reveal="mask">{plan_svg(z[1], z[2], d[0], d[1], f"{Y301['name']}: footprint {d[0]:.2f} by {d[1]:.2f} metres inside a safety zone of {z[1]:.2f} by {z[2]:.2f} metres")}</figure>
+  </div>
+</section>'''
+
+    process = f'''<section class="sec band-dark" id="how-we-work" aria-labelledby="proc-t">
+  <div class="wrap process">
+    <div class="process-head"><p class="eyebrow dot" data-reveal>How we work</p><h2 class="h2" id="proc-t" data-reveal style="margin-top:16px">From brief to <em>opening day.</em></h2><p class="lede" data-reveal style="margin-top:20px">One partner, one line of responsibility. You always know which step your project is in.</p><figure class="process-portrait"><img src="/img/process-team-cutout.png" alt="Two people reviewing a tablet and notebook together." loading="lazy" decoding="async"></figure></div>
+    <ol class="steps">{PROCESS_HTML}</ol>
+  </div>
+</section>'''
+
+    PREV = {"developers": "SW-E104", "hotels": "SW-E107", "schools": "SW-Y302", "municipalities": "SW-T212"}
+    IMGATTR = lambda sid: f' data-img="{BY[PREV[sid]]["thumb"]}"' if sid in PREV else ""
+    sectors = "".join(f'<li data-reveal style="--rd:{i}"><a class="ind" href="/who-we-work-with/#{s[0]}"{IMGATTR(s[0])}><span class="ind-name">{s[1]}</span><span class="ind-text">{s[2]}</span><span class="ind-go" aria-hidden="true">{ARROW}</span></a></li>' for i, s in enumerate(SECTORS))
+    who = f'''<section class="sec" aria-labelledby="ind-t">
+  <div class="wrap">
+    <div class="sec-head"><div><p class="eyebrow dot" data-reveal>Who we work with</p><h2 class="h2" id="ind-t" data-reveal>Built for the people who <em>commission</em> play.</h2></div><p data-reveal>Each kind of client needs something different from a play space. Choose yours to see where projects usually start.</p></div>
+    <ul class="ind-list">{sectors}</ul>
+  </div>
+</section>'''
+
+
+    body = hero + marquee + clients_band() + ceo_note() + divisions + swing_section() + fit + xforce_intro() + insight + process + factory_teaser() + who + ecosystem_section() + cta_band()
+    ld = [{"@type": "WebSite", "@id": BASE + "/#web", "url": BASE + "/", "name": "Dupedia", "publisher": {"@id": BASE + "/#org"}, "inLanguage": "en"}]
+    page("/", "Dupedia · Playground design, supply and installation in Egypt",
+         f"Dupedia designs, supplies and installs playgrounds, soft play, arcades, water parks and amusement attractions in Egypt, since 1989. Check which of {COUNT} playground products fit your site.",
+         body, active="/", ld=ld, catalog=True, intro=True)
+
+PROCESS = [
+    ("Brief", "Your site, your users, your budget and your timing. A site plan, or a few photos with rough measurements, is enough to start."),
+    ("Design", "We measure first, then draw a layout that keeps every published safety zone clear, and agree it with you."),
+    ("Supply", "Products and finishes exactly as specified, each with a code you can check against the drawing."),
+    ("Installation", "Assembly on site and handover of the finished space."),
+]
+PROCESS_HTML = "".join(f'<li data-reveal><span class="n">{n}</span><h3 class="h3">{n}</h3><p>{t}</p></li>' for n, t in PROCESS)
+PROCESS_HTML = "".join(f'<li data-reveal><span class="n"></span><h3 class="h3">{n}</h3><p>{t}</p></li>' for n, t in PROCESS)
+
+SECTORS = [
+ ("developers", "Real estate developers", "Landmark play landscapes for master-planned communities.", ["estate", "tower", "landscape"], "Real estate developer",
+  "Play is one of the first amenities residents use. We plan it with the masterplan: areas set aside for play, phase timing, and layouts your consultants can check.",
+  ["Project name, location and phase timing", "The areas set aside for play, as a plan (PDF or DXF)", "Who the spaces are for: age groups and rough numbers"]),
+ ("hotels", "Hotels &amp; resorts", "Signature play areas and matching site furniture.", ["estate", "landscape"], "Hotel or resort",
+  "A kids’ area that sits well in the landscape and stands up to sun, sand and constant use, with benches in the same design language.",
+  ["Property and location", "The available area and where guests approach it from", "Opening or refurbishment date"]),
+ ("schools", "Schools &amp; universities", "Early-years playhouses, climbing and agility.", ["early", "adventure"], "School or university",
+  "Age-appropriate equipment that fits the yard you actually have, with every safety zone drawn before anything is ordered.",
+  ["Yard dimensions or a site plan", "Age groups, and roughly how many children play at once", "Term dates that limit installation"]),
+ ("malls", "Shopping malls", "Indoor soft play and family entertainment.", [], "Shopping mall",
+  "Soft play and family entertainment fit-outs planned around your unit, footfall and opening hours.",
+  ["Unit floor plan with ceiling height", "Target age groups", "Planned opening date"]),
+ ("operators", "Entertainment operators", "Arcades, attractions and adventure circuits.", ["adventure"], "Entertainment operator",
+  "Arcade and FEC fit-outs, attractions and adventure circuits for operators who need a space that works every day.",
+  ["Venue location and floor area", "The mix you have in mind: arcade, soft play, attractions", "Opening date"]),
+ ("municipalities", "Municipalities &amp; government", "Towers, swings and benches for public parks.", ["tower", "adventure", "landscape"], "Municipality or government",
+  "Robust towers, swings and site furniture for public parks, specified with codes and sizes for tender documents.",
+  ["Park location and plan", "Tender or procurement stage", "Budget range, if known"]),
+]
+
+def build_playgrounds():
+    tiles = ""
+    for i, c in enumerate(COLL):
+        rep = next((p for p in P if p["collection"] == c["key"] and p["thumb"]), None)
+        tiles += f'''<li class="card" data-reveal style="--rd:{i}"><a href="/playgrounds/?c={c["key"]}#range" data-coll-link="{c["key"]}">
+  <span class="media"><img src="{rep["thumb"]}" alt="" width="560" height="350" loading="lazy"></span>
+  <span class="body"><span class="code">Collection {c["numeral"]} · {CCOUNT[c["key"]]} products</span><h2 class="nm">{e(c["name"])}</h2><span class="meta">{e(c["description"])}</span></span></a></li>'''
+    chips = f'<button type="button" class="chip" data-coll="" aria-pressed="true">All <span class="n">{COUNT}</span></button>' + "".join(
+        f'<button type="button" class="chip" data-coll="{c["key"]}" aria-pressed="false">{e(c["short"])} <span class="n">{CCOUNT[c["key"]]}</span></button>' for c in COLL)
+    ages = '<option value="">Any age</option>' + "".join(f'<option value="{a}">{a} years</option>' for a in range(1, 13))
+    cards = "\n".join(product_card(p) for p in P)
+    body = phero("Outdoor playgrounds · " + f"{COUNT} products · {len(COLL)} collections",
+                 "Playground equipment|you can <em>plan</em> with.",
+                 "Wooden play structures, climbing and agility, early-years playhouses and site furniture, made by Soliwood in Cairo and supplied and installed by Dupedia. Every product lists its code, size, platform height, age range and safety zone.",
+                 crumbs=[("Home", "/"), ("Playgrounds", "/playgrounds/")],
+                 actions=f'<a class="btn" href="#range">Browse the range {ARROW}</a><a class="link" href="/downloads/dupedia-playground-catalogue.pdf">{ic("download","ic ic-s")} Catalogue (PDF, 7&nbsp;MB)</a>') + f'''
+<section class="sec-tight" aria-label="Collections" style="padding-top:0">
+  <div class="wrap"><ul class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr))">{tiles}</ul></div>
+</section>
+<section id="range" data-range aria-labelledby="range-t">
+  <h2 class="sr" id="range-t">All products</h2>
+  <div class="filters">
+    <div class="wrap filters-in">
+      <div class="chips" role="group" aria-label="Collection">{chips}</div>
+      <div class="fctl">
+        <label class="fin"><span>Space</span><input id="r-l" type="number" inputmode="decimal" min="1" max="200" step="0.5" placeholder="L" aria-label="Space length in metres"><span>×</span><input id="r-w" type="number" inputmode="decimal" min="1" max="200" step="0.5" placeholder="W" aria-label="Space width in metres"><span>m</span></label>
+        <label class="fin"><span class="sr">Children’s age</span><select id="r-age">{ages}</select></label>
+        <label class="toggle"><input id="r-fit" type="checkbox"><span class="tg" aria-hidden="true"></span>Only what fits</label>
+        <label class="fin"><span class="sr">Search by name or code</span><input id="r-q" type="search" placeholder="Search name or code" autocomplete="off"></label>
+        <label class="fin"><span class="sr">Sort</span><select id="r-sort"><option value="coll">By collection</option><option value="small">Smallest safety zone</option><option value="large">Largest safety zone</option></select></label>
+      </div>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="results-line"><p id="r-count" aria-live="polite">{COUNT} products</p><a class="link" href="/contact/">Send us your site plan {ARROW}</a></div>
+    <div class="coll-intro" id="r-note" hidden></div>
+    <ul class="grid" id="grid">{cards}</ul>
+    <div class="empty" id="r-empty" hidden>
+      {block_band([("sq","c"),("qt","l"),("ci","c")])}
+      <p class="h3">Nothing matches <em>yet.</em></p>
+      <p class="muted">Try a larger space, another age, or clear the filters. Or send us your plan and we will look at it with you.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap"><button type="button" class="btn btn-ghost" id="r-reset">Clear filters</button><a class="btn" href="/contact/">Send us your plan</a></div>
+    </div>
+    <p class="source-note" style="margin-block:40px 96px">Products manufactured by Soliwood, Cairo. Codes, sizes, safety zones and ages are shown exactly as published by the manufacturer (October 2026). Products marked “zone set in your layout” have no fixed published zone; it is set when we draw your plan. Images are manufacturer product visuals.</p>
+  </div>
+</section>
+{cta_band()}'''
+    ld = [{"@type": "CollectionPage", "name": "Outdoor playground equipment", "url": BASE + "/playgrounds/", "isPartOf": {"@id": BASE + "/#web"},
+           "mainEntity": {"@type": "ItemList", "numberOfItems": COUNT, "itemListElement": [{"@type": "ListItem", "position": i + 1, "url": BASE + p["url"], "name": p["name"]} for i, p in enumerate(P)]}}]
+    page("/playgrounds/", f"Outdoor playground equipment in Egypt · {COUNT} wooden products",
+         f"Wooden playground equipment for compounds, schools, hotels and parks in Egypt: {COUNT} products in {len(COLL)} collections, each with dimensions, age range and safety zone. Filter by the space you have.",
+         body, active="/playgrounds/", ld=ld, catalog=True, crumbs=[("Home", "/"), ("Playgrounds", "/playgrounds/")])
+
+def build_products():
+    for i, p in enumerate(P):
+        c = CBY[p["collection"]]; code_l = p["code"].lower()
+        if p["img"]:
+            media = f'<div class="pd-media mask-bl"><img src="{p["img"]}" srcset="{p["thumb"]} 560w, {p["img"]} 1100w" sizes="(max-width: 960px) 92vw, 56vw" width="1100" height="700" fetchpriority="high" decoding="async" alt="{e(p["name"])} ({p["code"]}), {e(c["short"].lower())} collection, product visual" style="view-transition-name:pv-{code_l}"></div><figcaption class="pd-cap">Product visual · {p["code"]}</figcaption>'
+        else:
+            media = '<div class="pd-media mask-bl"><span class="noimg">Photograph to follow</span></div>'
+        z = zone_of(p)
+        zone_txt = nb(p["safetyZone"]) if z[0] != "plan" else f'{nb(p["safetyZone"])}'
+        spec = f'''<dl class="spec">
+  <div>{ic("dim")}<dt>Dimensions</dt><dd>{nb(p["dimensions"])}</dd></div>
+  <div>{ic("plat")}<dt>Platform height</dt><dd>{nb(p.get("platform") or "—")}</dd></div>
+  <div>{ic("zone")}<dt>Safety zone</dt><dd>{zone_txt}</dd></div>
+  <div>{ic("users")}<dt>Age range</dt><dd>{e(p["age"])}</dd></div>
+</dl>'''
+        inc = "".join(f"<li>{e(x)}</li>" for x in p.get("contents") or [])
+        fins = "".join(f'<li><i style="background:{f["hex"]}" aria-hidden="true"></i><b>{e(f["name"])}</b><span>{e(f["desc"])}</span></li>' for f in FIN)
+        same = [q for q in P if q["collection"] == p["collection"] and q["code"] != p["code"]][:4]
+        prev, nxt = P[i - 1], P[(i + 1) % len(P)]
+        zl = {"rect": "the published safety zone", "area": "the safety zone, published as an area", "plan": "a zone set in your layout"}[z[0]]
+        quote_url = f'/contact/?type={quote("Outdoor playground")}'
+        body = f'''<section class="sec-tight" style="padding-top:clamp(24px,4vw,56px)">
+  <div class="wrap">
+    <nav aria-label="Breadcrumb"><ol class="crumbs"><li><a href="/">Home</a></li><li><a href="/playgrounds/">Playgrounds</a></li><li><a href="/playgrounds/?c={c["key"]}#range">{e(c["short"])}</a></li><li aria-current="page">{e(p["name"])}</li></ol></nav>
+    <div class="pd-hero">
+      <figure class="pd-fig">{media}{'<span class="tag">New 2026</span>' if p.get("isNew") else ""}</figure>
+      <div class="pd-info">
+        <p class="pd-kicker"><span class="code">{p["code"]}</span><span class="ddot">{e(c["name"])}</span></p>
+        <h1 class="h2">{e(p["name"])}</h1>
+        <p class="muted">{e(p["description"])}</p>
+        {spec}
+        <div class="pd-act">
+          <button type="button" class="btn" data-sl="{p["code"]}" data-name="{e(p["name"])}" aria-pressed="false">{ic("plus","ic ic-s")} <span class="t">Add to shortlist</span></button>
+          <a class="btn btn-ghost" href="{quote_url}">Request a quote</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="sec-tight">
+  <div class="wrap pd-body">
+    <div>
+      <h2 class="h3">What’s <em>included</em></h2>
+      {f'<ul class="inc">{inc}</ul>' if inc else '<p class="muted" style="margin-top:16px">Component list on request.</p>'}
+      <h2 class="h4" style="margin-top:48px">Seven finishes</h2>
+      <ul class="finishes">{fins}</ul>
+      <p class="source-note" style="margin-top:14px">Colours are indicative. Ask for a physical sample before ordering.</p>
+    </div>
+    <div class="fp" data-fp="{p["code"]}">
+      <h2 class="h4">Will it fit your space?</h2>
+      <p class="muted" style="font-size:15px">Enter your space. We check the product against {zl}, in either orientation.</p>
+      <div class="fp-check">
+        <label class="fin"><span>Space</span><input id="fp-l" type="number" inputmode="decimal" min="1" max="200" step="0.5" placeholder="L" aria-label="Space length in metres"><span>×</span><input id="fp-w" type="number" inputmode="decimal" min="1" max="200" step="0.5" placeholder="W" aria-label="Space width in metres"><span>m</span></label>
+      </div>
+      <p class="fp-res" aria-live="polite"></p>
+      <svg role="img" aria-label="Footprint and safety zone of {e(p["name"])}, drawn to scale" viewBox="0 0 400 300"></svg>
+      <div class="plan-key"><span><i class="k-site"></i>Your space</span><span><i class="k-zone"></i>Safety zone</span><span><i class="k-prod"></i>Footprint</span></div>
+      <p class="fit-note">Geometry check against the published figures, not a safety certification.</p>
+    </div>
+  </div>
+</section>
+<section class="sec-tight">
+  <div class="wrap">
+    <p class="source-note">Manufactured by Soliwood, Cairo. Code, dimensions, platform height, safety zone and age range exactly as published by the manufacturer (October 2026). If a figure is missing, we confirm it in writing; we never estimate it.</p>
+    <div class="sec-head" style="margin-top:72px;margin-bottom:32px"><h2 class="h3">More from {e(c["name"])}</h2><a class="link" href="/playgrounds/?c={c["key"]}#range">All {CCOUNT[c["key"]]} {ARROW}</a></div>
+    <ul class="grid">{"".join(product_card(q) for q in same)}</ul>
+    <nav class="pd-pager" aria-label="Other products" style="margin-top:56px">
+      <a href="{prev["url"]}"><span class="code">Previous · {prev["code"]}</span><span class="nm">{e(prev["name"])}</span></a>
+      <a href="{nxt["url"]}"><span class="code">Next · {nxt["code"]}</span><span class="nm">{e(nxt["name"])}</span></a>
+    </nav>
+  </div>
+</section>
+{cta_band(title=f"Planning with the <em>{e(p['name'])}?</em>", text="Send us your site plan or rough measurements. Add it to your shortlist and it travels with your request.")}'''
+        props = [("Dimensions", p["dimensions"]), ("Platform height", p.get("platform")), ("Safety zone", p["safetyZone"]), ("Age range", p["age"])]
+        prod = {"@type": "Product", "name": p["name"], "sku": p["code"], "mpn": p["code"], "description": p["description"], "url": BASE + p["url"],
+                "category": f'Outdoor playground equipment > {c["name"]}',
+                "manufacturer": {"@type": "Organization", "name": "Soliwood"},
+                "additionalProperty": [{"@type": "PropertyValue", "name": n, "value": v} for n, v in props if v]}
+        if p["img"]: prod["image"] = BASE + p["img"]
+        desc = f'{p["name"]} ({p["code"]}): {p["dimensions"]}, safety zone {p["safetyZone"]}, ages {p["age"]}. {c["short"]} collection wooden playground equipment, supplied and installed in Egypt by Dupedia.'
+        page(p["url"], f'{p["name"]} ({p["code"]}) · Dupedia playgrounds', desc[:300], body, active="/playgrounds/", ld=[prod], catalog=True,
+             og_image=p["img"], crumbs=[("Home", "/"), ("Playgrounds", "/playgrounds/"), (p["name"], p["url"])])
+
+def build_divisions():
+    secs = ""
+    for k, anchor, name, text, col, fg, cells, ptype in DIVISIONS:
+        who = [s for s in SECTORS if (k == "play" and s[3]) or (k == "soft" and s[0] in ("malls", "hotels", "operators")) or (k == "arcade" and s[0] in ("malls", "operators")) or (k == "water" and s[0] in ("hotels", "developers", "operators")) or (k == "amuse" and s[0] in ("operators", "municipalities", "malls"))]
+        need = {
+            "play": ["Site plan or yard dimensions", "Age groups and how many play at once", "Products you are considering, if any"],
+            "soft": ["Floor plan with ceiling height", "Age groups and expected visitors at once", "Opening date"],
+            "arcade": ["Venue floor plan", "The audience and the mix you have in mind", "Opening date"],
+            "water": ["Site plan and the water area you have in mind", "Who will use it and how many at once", "Season or opening date"],
+            "amuse": ["Site or venue plan", "The kind of rides or attractions you have in mind", "Opening date and budget range, if known"],
+        }[k]
+        if k == "play":
+            status = f'<p class="ddot" style="--c:{col}">{COUNT} products, fully specified</p>'
+            act = f'<a class="btn" href="/playgrounds/">Browse the range {ARROW}</a><a class="link" href="/#fit">Check what fits your space {ARROW}</a>'
+            media = f'<figure class="dsec-photo mask-bl">{div_img(k, "(max-width:860px) 92vw, 54vw")}</figure>'
+        else:
+            status = f'<p class="ddot" style="--c:{col}">Range on request</p>'
+            label = {"soft": "a soft play", "arcade": "an arcade", "water": "a water park", "amuse": "an amusement"}[k]
+            act = f'<a class="btn" href="/contact/?type={quote(ptype)}">Discuss {label} project {ARROW}</a>'
+            media = f'<figure class="dsec-photo mask-bl">{div_img(k, "(max-width:860px) 92vw, 54vw")}</figure>'
+        secs += f'''<section class="dsec" id="{anchor}" aria-labelledby="d-{anchor}">
+  <div class="dsec-side" data-reveal>{mark(k)}<h2 class="h2" id="d-{anchor}">{name}</h2>{status}</div>
+  <div data-reveal style="--rd:1">
+    <p class="lede">{text}</p>
+    <div class="split" style="margin-top:32px;gap:32px">
+      <div><h3 class="h4">Usually for</h3><ul class="plain" style="margin-top:12px;display:grid;gap:8px">{"".join(f'<li><a class="link-plain" href="/who-we-work-with/#{s[0]}">{s[1]}</a></li>' for s in who)}</ul></div>
+      <div><h3 class="h4">To quote, send us</h3><ul class="checklist" style="margin-top:4px">{"".join(f"<li><span>{x}</span></li>" for x in need)}</ul></div>
+    </div>
+    {media}
+    <div class="phero-act">{act}</div>
+  </div>
+</section>'''
+    body = phero("What we build", "Five kinds of place|to <em>play.</em>",
+                 "Outdoor playgrounds, indoor and soft play, arcades, water parks and amusement attractions. One team from the first sketch to installation.",
+                 crumbs=[("Home", "/"), ("What we build", "/what-we-build/")],
+                 actions="".join(f'<a class="chip" style="text-decoration:none" href="#{a}"><span class="ddot" style="--c:{col}"></span>{n}</a>' for k, a, n, t, col, *_ in DIVISIONS)) + f'''
+<div class="wrap">{secs}</div>
+{cta_band()}'''
+    ld = [{"@type": "Service", "name": strip(n), "serviceType": strip(n), "description": t, "provider": {"@id": BASE + "/#org"},
+           "areaServed": [{"@type": "Country", "name": c} for c in CFG.get("serviceArea", [])], "url": BASE + f"/what-we-build/#{a}"} for k, a, n, t, *_ in DIVISIONS]
+    page("/what-we-build/", "Playgrounds, soft play, arcades, water parks and amusement",
+         "What Dupedia builds in Egypt: outdoor playgrounds, indoor and soft play, arcade and FEC fit-outs, water parks and amusement attractions, from first sketch to installation.",
+         body, active="/what-we-build/", ld=ld, crumbs=[("Home", "/"), ("What we build", "/what-we-build/")])
+
+def strip(s): return html.unescape(re.sub(r"<[^>]+>", "", s))
+
+def build_sectors():
+    secs = ""
+    for i, (sid, name, short, colls, role, long, need) in enumerate(SECTORS):
+        start = "".join(f'<a class="chip" style="text-decoration:none" href="/playgrounds/?c={c}#range">{e(CBY[c]["short"])} <span class="n">{CCOUNT[c]}</span></a>' for c in colls) \
+            if colls else '<a class="chip" style="text-decoration:none" href="/what-we-build/#soft-play">Indoor &amp; soft play</a><a class="chip" style="text-decoration:none" href="/what-we-build/#arcades">Arcades &amp; games</a>'
+        secs += f'''<section class="dsec" id="{sid}" aria-labelledby="s-{sid}">
+  <div class="dsec-side" data-reveal><p class="code">{i + 1:02d}</p><h2 class="h2" id="s-{sid}">{name}</h2><p class="muted">{short}</p></div>
+  <div data-reveal style="--rd:1">
+    <p class="lede">{long}</p>
+    <h3 class="h4" style="margin-top:32px">Start with</h3><div class="seg" style="margin-top:12px">{start}</div>
+    <h3 class="h4" style="margin-top:32px">What helps us quote quickly</h3>
+    <ul class="checklist" style="margin-top:4px">{"".join(f"<li><span>{x}</span></li>" for x in need)}</ul>
+    <div class="phero-act"><a class="btn" href="/contact/?sector={quote(role)}">Discuss your project {ARROW}</a></div>
+  </div>
+</section>'''
+    consult = f'''<section class="sec band-dark" aria-labelledby="con-t">
+  <div class="wrap split">
+    <div><p class="eyebrow" data-reveal>For landscape architects and consultants</p><h2 class="h2" id="con-t" data-reveal style="margin-top:16px">Specs you can put in a <em>drawing.</em></h2></div>
+    <div class="tiles" data-reveal style="--rd:1">
+      <div class="tile">{ic("doc")}<h3>A spec page per product</h3><p>Code, dimensions, platform height, age range and published safety zone for all {COUNT} outdoor products.</p><a class="link" href="/playgrounds/">Browse the range {ARROW}</a></div>
+      <div class="tile">{ic("plan")}<h3>Send a DXF or PDF, get a layout</h3><p>Send your site plan as DXF, PDF or a photo with dimensions. We return a layout with every safety zone drawn.</p><a class="link" href="/contact/">Send your plan {ARROW}</a></div>
+      <div class="tile">{ic("download")}<h3>The full catalogue</h3><p>All five collections in one PDF for your library.</p><a class="link" href="/downloads/dupedia-playground-catalogue.pdf">Download (7&nbsp;MB) {ARROW}</a></div>
+    </div>
+  </div>
+</section>'''
+    body = phero("Who we work with", "Built for the people|who <em>commission</em> play.",
+                 "Developers, hotels, schools, malls, operators and public bodies each need something different from a play space. Here is where each one usually starts, and what we need to quote.",
+                 crumbs=[("Home", "/"), ("Who we work with", "/who-we-work-with/")],
+                 actions="".join(f'<a class="chip" style="text-decoration:none" href="#{s[0]}">{s[1]}</a>' for s in SECTORS)) + f'<div class="wrap">{secs}</div>{consult}{cta_band()}'
+    page("/who-we-work-with/", "Playgrounds for developers, hotels, schools, malls and parks",
+         "How Dupedia plans play spaces for real estate developers, hotels and resorts, schools, shopping malls, entertainment operators and municipalities in Egypt, and what we need to quote.",
+         body, active="/who-we-work-with/", crumbs=[("Home", "/"), ("Who we work with", "/who-we-work-with/")])
+
+def build_guide():
+    z = zone_of(Y301); d = dims_of(Y301)
+    rows = "".join(f'''<tr><td><a href="/playgrounds/?c={c["key"]}#range">{e(c["name"])}</a></td><td class="num">{n}</td><td class="num">{nr}</td>
+<td><a href="{sm[0]["url"]}">{e(sm[0]["name"])}</a><br><span class="muted">{sm[1][1]:.2f} × {sm[1][2]:.2f} m</span></td>
+<td><a href="{lg[0]["url"]}">{e(lg[0]["name"])}</a><br><span class="muted">{lg[1][1]:.2f} × {lg[1][2]:.2f} m</span></td><td class="num">{med:.1f}×</td></tr>''' for c, n, nr, sm, lg, med in coll_stats())
+    faqs = [
+        ("What is a safety zone?", "The free area a layout must keep around a piece of play equipment, as published by its manufacturer. Nothing else goes inside it: no other equipment, no benches, no trees, no paths crossing it."),
+        ("Does the fit check certify my layout?", "No. It checks geometry against the published figures: whether equipment and zones fit your site and stay clear of each other. It is not a safety certification. We review every layout before quoting."),
+        ("Can a product be turned to fit?", "Yes. The fit check on this site tries each product in both orientations, and we do the same when we draw your layout."),
+        ("Some products say “zone set in your layout”. What does that mean?", f"The manufacturer publishes a fixed zone for {ZKIND['rect']} of the {COUNT} products. For the others, the zone is published as an area only ({ZKIND['area']}) or set per site plan ({ZKIND['plan']}), so we draw it when we lay out your site."),
+        ("Which files can I send?", "A PDF or DXF site plan is ideal. A photo with rough dimensions is enough to start. If you work in CAD, a DXF export is easiest for us to measure from."),
+        ("Do you give prices online?", "No. Prices depend on the products, the site and the surfacing, so we prepare a quotation for each project."),
+    ]
+    faq = "".join(f'<details><summary>{q}<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>{a}</p></div></details>' for q, a in faqs)
+    body = phero("Planning guide", "How much space does a|playground <em>need?</em>",
+                 "More than the equipment itself. Here is how safety zones work, what the figures in our range say, and what to prepare before you send us a plan.",
+                 crumbs=[("Home", "/"), ("Planning guide", "/planning-guide/")]) + f'''
+<section class="sec-tight" style="padding-top:0">
+  <div class="wrap insight">
+    <div class="prose" data-reveal>
+      <h2 class="h3" style="color:var(--charcoal)">Plan the zone, not just the <em>equipment.</em></h2>
+      <p style="margin-top:20px">Every structure in our outdoor range has a published safety zone: the free area the layout must keep around it. It is usually much larger than the structure.</p>
+      <p>{e(Y301["name"])} ({Y301["code"]}) stands on {d[0]:.2f} × {d[1]:.2f}&nbsp;m, about {Y_FOOT:.1f}&nbsp;m². Its zone is {z[1]:.2f} × {z[2]:.2f}&nbsp;m, about {Y_ZONE:.0f}&nbsp;m², which is {Y_RATIO:.1f} times its footprint. If a yard is planned from the footprint, it will not fit.</p>
+    </div>
+    <figure class="insight-fig mask-tr" data-reveal="mask">{plan_svg(z[1], z[2], d[0], d[1], f"{Y301['name']}: footprint inside its safety zone, to scale")}</figure>
+  </div>
+</section>
+<section class="sec-tight">
+  <div class="wrap">
+    <div class="sec-head"><h2 class="h3" data-reveal>Safety zones across the <em>range</em></h2><p data-reveal>Calculated from the manufacturer’s published figures for products with a rectangular zone. The ratio is zone area divided by footprint area.</p></div>
+    <div class="tbl-wrap" data-reveal><table class="tbl"><caption class="sr">Safety zone figures by collection</caption>
+      <thead><tr><th scope="col">Collection</th><th scope="col" class="num">Products</th><th scope="col" class="num">In this comparison</th><th scope="col">Smallest zone</th><th scope="col">Largest zone</th><th scope="col" class="num">Median zone ÷ footprint</th></tr></thead>
+      <tbody>{rows}</tbody></table></div>
+    {EXCL_NOTE}
+  </div>
+</section>
+<section class="sec">
+  <div class="wrap split">
+    <div><p class="eyebrow" data-reveal>Before you send a plan</p><h2 class="h2" data-reveal style="margin-top:16px">Six things that make a <em>quote</em> faster.</h2><p class="lede" data-reveal style="margin-top:20px">You don’t need all of them to start. A rough sketch with measurements is enough for a first conversation.</p></div>
+    <ol class="checklist" data-reveal style="--rd:1">
+      <li><span><b>Location</b>City or area, and whether the site is indoors or outdoors.</span></li>
+      <li><span><b>Usable area or a site plan</b>PDF, DXF, or a photo with rough dimensions. Note trees, drains, levels and access.</span></li>
+      <li><span><b>Who will use it</b>Age groups, and roughly how many children at once.</span></li>
+      <li><span><b>Type of space</b>Outdoor playground, indoor or soft play, water, or something else.</span></li>
+      <li><span><b>Target opening date</b>Or the tender and planning stage you are at.</span></li>
+      <li><span><b>Budget range</b>If you know it. It helps us suggest the right scale.</span></li>
+    </ol>
+  </div>
+</section>
+<section class="sec-tight sec-white">
+  <div class="wrap split">
+    <div><h2 class="h2" data-reveal>Questions we <em>hear</em> often</h2></div>
+    <div class="faq" data-reveal style="--rd:1">{faq}</div>
+  </div>
+</section>
+{cta_band(title="Check your plan with <em>us.</em>", text="Send your site plan and the products you are considering. We check each one against its published safety zone and tell you what fits.", secondary=("Check what fits", "/#fit"))}'''
+    ld = [{"@type": "Article", "headline": "How much space does a playground need?", "about": "Playground safety zones and site planning",
+           "author": {"@id": BASE + "/#org"}, "publisher": {"@id": BASE + "/#org"}, "dateModified": TODAY, "mainEntityOfPage": BASE + "/planning-guide/", "inLanguage": "en"}]
+    page("/planning-guide/", "Playground safety zones: how much space a playground needs",
+         f"Why a play unit needs more space than it takes up: how safety zones work, figures across {COUNT} playground products, and what to prepare before you ask for a quote.",
+         body, active="/planning-guide/", ld=ld, crumbs=[("Home", "/"), ("Planning guide", "/planning-guide/")])
+
+def build_about():
+    body = phero("About Dupedia", "Serious about <em>play</em>|since 1989.",
+                 "Dupedia designs, supplies and installs places to play: playgrounds, soft play, arcades, water parks and amusement attractions. We build them for the developers, hotels, schools, malls and operators who need them to be safe, look good and last.",
+                 crumbs=[("Home", "/"), ("About", "/about/")]) + f'''
+<section class="band-dark facts" aria-label="Dupedia in numbers">
+  <div class="wrap facts-in">
+    <div data-reveal><b class="lime">1989</b><span>Established</span></div>
+    <div data-reveal style="--rd:1"><b>5</b><span>Divisions, one team</span></div>
+    <div data-reveal style="--rd:2"><b>{COUNT}</b><span>Outdoor products, each fully specified</span></div>
+    <div data-reveal style="--rd:3"><b>{tbc("Projects delivered")}</b><span>Projects delivered</span></div>
+  </div>
+</section>
+{ceo_note()}
+<section class="sec">
+  <div class="wrap split">
+    <div data-reveal><h2 class="h2">Our <em>story</em></h2></div>
+    <div data-reveal style="--rd:1">
+      <div class="tbc-block"><b>Company story · to be supplied</b>Founding, what Dupedia makes in-house and what it sources, the team, installation and after-sales service. 80–120 words, approved facts only.</div>
+      <div class="tbc-block" style="margin-top:12px"><b>Certifications and standards · to be supplied</b>Name any standards the equipment and installation are certified to (for example EN 1176/1177), with the certificate holder and date. Nothing is claimed until it is confirmed in writing.</div>
+    </div>
+  </div>
+</section>
+{clients_band('cl-about')}
+<section class="sec sec-white">
+  <div class="wrap">
+    <div class="sec-head"><div><p class="eyebrow" data-reveal>How we work</p><h2 class="h2" data-reveal>Four things you can <em>hold</em> us to.</h2></div></div>
+    <div class="tiles">
+      <div class="tile" data-reveal>{ic("chat")}<h3>One partner, first sketch to handover</h3><p>Design, supply and installation by one team, across all five kinds of play space.</p></div>
+      <div class="tile" data-reveal style="--rd:1">{ic("ruler")}<h3>We measure first</h3><p>Layouts start from your site’s real numbers: usable area, levels, access, and the trees and drains already there.</p></div>
+      <div class="tile" data-reveal style="--rd:2">{ic("dim")}<h3>Real sizes, real codes</h3><p>Every product carries a code and a full specification, so your team can plan before a site visit.</p></div>
+      <div class="tile" data-reveal style="--rd:3">{ic("check")}<h3>No guessed figures</h3><p>Every spec comes from the approved product sheet. If a figure is missing, we confirm it in writing; we never estimate it.</p></div>
+    </div>
+  </div>
+</section>
+<section class="sec">
+  <div class="wrap split">
+    <figure class="split-media mask-bl" data-reveal="mask"><img src="{BY["SW-E104"]["img"]}" srcset="{BY["SW-E104"]["thumb"]} 560w, {BY["SW-E104"]["img"]} 1100w" sizes="(max-width:860px) 92vw, 46vw" alt="{e(BY["SW-E104"]["name"])}, product visual" width="1100" height="700" loading="lazy"></figure>
+    <div data-reveal style="--rd:1"><p class="eyebrow">Our outdoor range</p><h2 class="h2" style="margin-top:16px">Made with a partner in <em>Cairo.</em></h2>
+      <p class="lede" style="margin-top:20px">Our wooden outdoor playground range is made by our manufacturing partner Soliwood in Cairo, and supplied and installed by Dupedia: {COUNT} wooden products in five collections, from toddler playhouses to landmark play landscapes, in seven finishes.</p>
+      <div class="phero-act"><a class="btn" href="/playgrounds/">See the range {ARROW}</a><a class="link" href="/downloads/dupedia-playground-catalogue.pdf">{ic("download","ic ic-s")} Catalogue (PDF)</a></div></div>
+  </div>
+</section>
+{cta_band()}'''
+    ld = [{"@type": "AboutPage", "name": "About Dupedia", "url": BASE + "/about/", "about": {"@id": BASE + "/#org"}}]
+    page("/about/", "About Dupedia: serious about play since 1989",
+         "Dupedia designs, supplies and installs playgrounds, soft play, arcades, water parks and amusement attractions in Egypt. How we work, and what you can hold us to.",
+         body, active="/about/", ld=ld, crumbs=[("Home", "/"), ("About", "/about/")])
+
+def build_contact():
+    roles = ["", "Real estate developer", "Hotel or resort", "School or university", "Shopping mall", "Entertainment operator", "Municipality or government", "Landscape architect or consultant", "Other"]
+    types = ["Outdoor playground", "Indoor & soft play", "Arcade / FEC", "Water park", "Amusement attraction", "Not sure yet"]
+    timings = ["Not decided", "Within 3 months", "3–6 months", "6–12 months", "Tender / planning stage"]
+    opt = lambda xs: "".join(f'<option value="{e(x)}">{e(x) or "Choose one"}</option>' for x in xs)
+    c = CFG["contact"]
+    body = phero("Contact", "Tell us about|your <em>space.</em>",
+                 "Share the basics and your shortlist. A rough sketch with measurements is enough to start.",
+                 crumbs=[("Home", "/"), ("Contact", "/contact/")]) + f'''
+<section class="sec-tight" style="padding-top:0">
+  <div class="wrap form-wrap">
+    <div class="contact-support">
+      <h2 class="h4">What happens next</h2>
+      <ol class="next-steps">
+        <li>{ic("doc","ic")}<span>The Dupedia team reads your request and replies using the details you give. {tbc("Reply time")}</span></li>
+        <li>{ic("ruler","ic")}<span>We look at your site: a plan, photos with rough dimensions, or a visit.</span></li>
+        <li>{ic("plan","ic")}<span>You get a layout with every safety zone drawn, and a quotation.</span></li>
+      </ol>
+      <dl class="contact-list">
+        <div><dt>Sales</dt><dd>{contact_line("phone")}</dd></div>
+        <div><dt>WhatsApp</dt><dd>{contact_line("whatsapp")}</dd></div>
+        <div><dt>Email</dt><dd>{contact_line("email")}</dd></div>
+        <div><dt>Head office</dt><dd>{contact_line("address")}</dd></div>
+      </dl>
+      <div class="sl-box" id="sl-box" aria-live="polite">
+        <h2>Your shortlist</h2>
+        <ul class="sl-list" id="sl-list"></ul>
+        <p class="muted" id="sl-empty" style="font-size:15px">No products yet. Use <b>+ Shortlist</b> on any product to add it, or <a class="link-plain" href="/playgrounds/">browse the range</a>.</p>
+      </div>
+    </div>
+    <div class="contact-enquiry">
+      <form class="form" id="enq-form" novalidate aria-labelledby="form-t">
+        <h2 class="h3" id="form-t">Request a quote</h2>
+        <p class="muted" style="margin:8px 0 28px;font-size:15px">Fields marked required are the only ones we need.</p>
+        <div class="form-grid">
+          <label class="field" for="f-name"><span>Full name <i class="req">required</i></span><input id="f-name" name="name" type="text" autocomplete="name" required></label>
+          <label class="field" for="f-company"><span>Company</span><input id="f-company" name="company" type="text" autocomplete="organization"></label>
+          <label class="field" for="f-email"><span>Email <i class="req">required</i></span><input id="f-email" name="email" type="email" autocomplete="email" required></label>
+          <label class="field" for="f-phone"><span>Phone / WhatsApp</span><input id="f-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel"></label>
+          <label class="field" for="f-role"><span>I am a</span><select id="f-role" name="role">{opt(roles)}</select></label>
+          <label class="field" for="f-type"><span>Project type</span><select id="f-type" name="projectType">{opt(types)}</select></label>
+          <label class="field" for="f-loc"><span>Project location <i class="req">required</i></span><input id="f-loc" name="location" type="text" autocomplete="address-level2" placeholder="City or area" required></label>
+          <label class="field" for="f-site"><span>Available space</span><input id="f-site" name="site" type="text" placeholder="e.g. 15 × 10 m"></label>
+          <label class="field span2" for="f-time"><span>Timing</span><select id="f-time" name="timing">{opt(timings)}</select></label>
+          <label class="field span2" for="f-msg"><span>Tell us more</span><textarea id="f-msg" name="message" rows="5" placeholder="Who the space is for, how many at once, anything on site we should know"></textarea></label>
+          <input type="hidden" id="f-shortlist" name="shortlist">
+          <div class="hp" aria-hidden="true"><label for="f-website">Leave this empty</label><input id="f-website" name="website" type="text" tabindex="-1" autocomplete="off"></div>
+        </div>
+        <p class="form-err" id="form-err" role="alert" hidden></p>
+        <div class="form-foot">
+          <button class="btn btn-lime" type="submit" id="f-submit">Send my request {ARROW}</button>
+          <p class="form-note">We use these details only to reply to your enquiry. <a class="link-plain" href="/privacy/">Privacy</a></p>
+        </div>
+      </form>
+      <div class="form state" id="form-done" hidden tabindex="-1">
+        {block_band([("sq","c"),("qt","l"),("ci","c")], "snap-in")}
+        <h2 class="h3">Request <em>received.</em></h2>
+        <p>Reference <b id="done-ref"></b>. The Dupedia team will contact you using the details you gave.</p>
+        <button type="button" class="link" id="done-new">Send another request</button>
+      </div>
+      <div class="form state" id="form-off" hidden tabindex="-1">
+        <h2 class="h3">Online sending isn’t <em>connected</em> yet.</h2>
+        <p>Your request has <b>not</b> been sent. Copy it below and send it to the Dupedia team{" by email or WhatsApp" if (c.get("email") or c.get("whatsapp")) else ""}.</p>
+        <textarea id="off-text" rows="9" readonly aria-label="Your request as text"></textarea>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
+          <button type="button" class="btn" id="off-copy">Copy request</button>
+          <a class="btn btn-ghost" id="off-mail" hidden>Open in email</a>
+          <a class="btn btn-ghost" id="off-wa" hidden>Send on WhatsApp</a>
+          <span id="off-status" aria-live="polite" class="muted"></span>
+        </div>
+        <button type="button" class="link" id="off-back">Back to the form</button>
+      </div>
+    </div>
+  </div>
+</section>'''
+    ld = [{"@type": "ContactPage", "name": "Request a quote", "url": BASE + "/contact/", "about": {"@id": BASE + "/#org"}}]
+    page("/contact/", "Request a playground quote",
+         "Tell Dupedia about your space: location, size, who it is for and your timing. Add products from the range to your shortlist and they travel with your request.",
+         body, active="/contact/", ld=ld, catalog=True, crumbs=[("Home", "/"), ("Contact", "/contact/")])
+
+def build_privacy():
+    body = phero("Privacy", "Your details, <em>briefly.</em>", "What the quote form collects, why, and what we do with it.",
+                 crumbs=[("Home", "/"), ("Privacy", "/privacy/")]) + f'''
+<section class="sec-tight" style="padding-top:0"><div class="wrap prose">
+  <h2 class="h4" style="color:var(--charcoal)">What we collect</h2>
+  <p>When you send a quote request we receive the details you type into the form: your name, company, email, phone, role, project type and location, available space, timing, your message and the products on your shortlist.</p>
+  <h2 class="h4" style="color:var(--charcoal);margin-top:32px">Why</h2>
+  <p>Only to reply to your enquiry and prepare a quotation. We do not sell your details or add you to a mailing list without asking.</p>
+  <h2 class="h4" style="color:var(--charcoal);margin-top:32px">Stored on your device</h2>
+  <p>Your shortlist is kept in your own browser so it is still there when you come back. It is not sent anywhere until you send a request.</p>
+  <h2 class="h4" style="color:var(--charcoal);margin-top:32px">Cookies and analytics</h2>
+  <p>{"This site uses Plausible, a cookie-free analytics service that does not collect personal data." if CFG["analytics"].get("plausibleDomain") else "This site sets no tracking cookies and runs no analytics."}</p>
+  <h2 class="h4" style="color:var(--charcoal);margin-top:32px">Contact</h2>
+  <p>To ask what we hold about you, or to have it deleted: {contact_line("email")}. Data controller: Dupedia, {contact_line("address")}.</p>
+  <p class="muted" style="margin-top:24px">Last updated {TODAY}. {tbc("Legal review")}</p>
+</div></section>'''
+    page("/privacy/", "Privacy", "How Dupedia uses the details you send through the quote form.", body, crumbs=[("Home", "/"), ("Privacy", "/privacy/")])
+
+def build_404():
+    body = f'''<section class="sec nf"><div class="wrap">
+  {block_band([("sq","c"),("qt","l"),("gap","c"),("ci","c")], "snap-in")}
+  <p class="eyebrow">Page not found · 404</p>
+  <h1 class="h1" style="margin-top:16px">This piece doesn’t <em>fit</em> here.</h1>
+  <p class="lede" style="margin-top:20px">The page may have moved. These will get you back on track.</p>
+  <div class="phero-act"><a class="btn" href="/">Home {ARROW}</a><a class="link" href="/playgrounds/">Playground range {ARROW}</a><a class="link" href="/contact/">Request a quote {ARROW}</a></div>
+</div></section>'''
+    page("/404.html", "Page not found", "This page could not be found. Find playground products, planning help or request a quote from Dupedia.", body, robots="noindex")
+
+
+# ------------------------------------------------------------------ factory and manufacturing
+ISO = CFG.get("iso9001") or {}
+ISO_N = [0]  # unique ids for the ring path when a page shows the badge more than once
+def iso_badge(size=168):
+    """Dupedia-designed certification badge (not the ISO logo, which certified companies may not use)."""
+    ISO_N[0] += 1; rid = f"isoring{ISO_N[0]}"
+    ring = "QUALITY MANAGEMENT SYSTEM · CERTIFIED · "
+    return f'''<span class="iso" style="--iso:{size}px" role="img" aria-label="ISO 9001 certified quality management system">
+  <svg viewBox="0 0 200 200" aria-hidden="true"><defs><path id="{rid}" d="M100,100 m-78,0 a78,78 0 1,1 156,0 a78,78 0 1,1 -156,0"/></defs>
+    <circle cx="100" cy="100" r="98" class="iso-bg"/><g class="iso-spin"><text class="iso-ring"><textPath href="#{rid}" textLength="482" lengthAdjust="spacing">{ring}</textPath></text></g>
+    <circle cx="100" cy="100" r="58" class="iso-core"/>
+    <text x="100" y="96" text-anchor="middle" class="iso-big">ISO</text><text x="100" y="128" text-anchor="middle" class="iso-num">9001</text></svg>
+</span>'''
+
+def iso_details():
+    body = e(ISO["certificationBody"]) if ISO.get("certificationBody") else tbc("Certification body")
+    num = e(ISO["certificateNumber"]) if ISO.get("certificateNumber") else tbc("Certificate number")
+    return body, num
+
+SAFETY = e(CFG["safetyStandard"]) if CFG.get("safetyStandard") else "international playground safety requirements"
+PILLARS = [
+    ("check", "Selected materials", "Timber, steel and fittings chosen for outdoor play and inspected before they enter production."),
+    ("safety", "Quality control at every stage", "Each stage of manufacturing has its own check, from incoming material to the finished, packed product."),
+    ("doc", "ISO 9001 certified", "Our quality management system is certified to ISO 9001, so every order follows the same documented process."),
+    ("users", f"Made to {SAFETY}", "Designed and built around published safety zones and the safety requirements international buyers expect."),
+    ("arrow", "Ready for global markets", "Full codes, dimensions and documentation for every product, so it can stand next to any imported brand in a tender."),
+]
+MFG_STEPS = [
+    ("Materials in", "Timber, steel, fittings and finishes are selected for outdoor play and inspected on arrival. Nothing enters production without passing that check."),
+    ("Cutting and machining", "Parts are cut and machined to the approved drawings for each product code, so every set is made to the same specification."),
+    ("Sanding and finishing", "Edges and surfaces are smoothed for small hands, then finished for sun and weather."),
+    ("Assembly and fit check", "Structures are assembled and checked for fit in the factory, before anything leaves for site."),
+    ("Final inspection", "Each order is inspected against its product specification and signed off under our ISO 9001 procedures."),
+    ("Pack, deliver, install", "Components are packed with their drawings, delivered and installed by our team, then handed over."),
+]
+
+def worker_figure(cls="", eager=False):
+    return f'''<figure class="worker {cls}">
+  <span class="worker-ball" aria-hidden="true"></span>
+  <img src="/img/factory-worker-embroidered.webp" width="1186" height="1327" {"fetchpriority=" + chr(34) + "high" + chr(34) if eager else "loading=" + chr(34) + "lazy" + chr(34)} decoding="async" alt="A Dupedia factory worker in a hard hat and safety vest with the Dupedia logo embroidered directly on the vest, arms crossed, smiling.">
+</figure>'''
+
+def factory_teaser():
+    pills = "".join(f'<li data-reveal style="--rd:{i}">{ic(icn, "ic ic-s")}<span>{t}</span></li>' for i, (icn, t, _) in enumerate(PILLARS))
+    return f'''<section class="sec factory-teaser" aria-labelledby="ft-t">
+  <div class="wrap factory-grid">
+    {worker_figure()}
+    <div class="factory-copy">
+      <p class="eyebrow dot" data-reveal>Our factory</p>
+      <h2 class="h1" id="ft-t" data-reveal style="margin-top:18px">Made by people who are serious about <em>play.</em></h2>
+      <p class="lede" data-reveal style="margin-top:22px">We manufacture in our own factory, from selected materials, with quality control at every stage and an ISO 9001 certified quality system.</p>
+      <ul class="pills">{pills}</ul>
+      <div class="phero-act" data-reveal>{iso_badge(112)}<a class="btn" href="/our-factory/" data-magnetic>Inside our factory {ARROW}</a></div>
+    </div>
+  </div>
+</section>'''
+
+def build_factory():
+    steps = "".join(f'<li data-reveal><span class="n"></span><h3 class="h3">{n}</h3><p>{t}</p></li>' for n, t in MFG_STEPS)
+    tiles = "".join(f'<div class="tile" data-reveal style="--rd:{i}">{ic(icn)}<h3>{t}</h3><p>{d}</p></div>' for i, (icn, t, d) in enumerate(PILLARS))
+    body_name, cert_no = iso_details()
+    std = e(CFG["safetyStandard"]) if CFG.get("safetyStandard") else tbc("Standard, e.g. EN 1176 / EN 1177")
+    hero = f'''<section class="phero factory-hero" aria-labelledby="fh-t">
+  <div class="wrap factory-grid">
+    <div class="factory-copy">
+      <nav aria-label="Breadcrumb"><ol class="crumbs"><li><a href="/">Home</a></li><li aria-current="page">Our factory</li></ol></nav>
+      <p class="eyebrow dot">Our factory · Manufacturing</p>
+      {hline("Made by people|who are serious|about <em>play.</em>")}
+      <p class="lede">What we make in our own factory is made one way: selected materials, a check at every stage of production, and an ISO 9001 certified quality management system behind every order.</p>
+      <div class="phero-act">{iso_badge(124)}<a class="btn" href="/contact/" data-magnetic>Talk to our team {ARROW}</a></div>
+    </div>
+    {worker_figure("worker-hero", eager=True)}
+  </div>
+</section>'''
+    body = hero + f'''
+<div class="marquee" aria-hidden="true"><div class="marquee-track">{("<span>Selected materials<i class='mk'></i></span><span>Quality control at every stage<i class='mk' style='border-radius:50%'></i></span><span><em>ISO 9001 certified</em><i class='mk' style='border-radius:100% 0 0 0'></i></span><span>Ready for global markets<i class='mk' style='border-radius:999px 999px 0 0'></i></span>") * 4}</div></div>
+<section class="sec" aria-labelledby="why-t">
+  <div class="wrap">
+    <div class="sec-head"><div><p class="eyebrow dot" data-reveal>What goes into every product</p><h2 class="h2" id="why-t" data-reveal>Five promises, made in the <em>factory.</em></h2></div><p data-reveal>Quality is not inspected in at the end. It is built in at each step, by the same team, to the same written process.</p></div>
+    <div class="tiles tiles-5">{tiles}</div>
+  </div>
+</section>
+<section class="sec band-dark" aria-labelledby="mp-t">
+  <div class="wrap process">
+    <div class="process-head"><p class="eyebrow dot" data-reveal>Manufacturing process</p><h2 class="h2" id="mp-t" data-reveal style="margin-top:16px">Six stages, six <em>checks.</em></h2><p class="lede" data-reveal style="margin-top:20px">Every stage ends with a quality check before the work moves on. Nothing skips a step.</p></div>
+    <ol class="steps">{steps}</ol>
+  </div>
+</section>
+<section class="sec band-lime" aria-labelledby="iso-t">
+  <div class="wrap split" style="align-items:center">
+    <div data-reveal>{iso_badge(260)}</div>
+    <div>
+      <p class="eyebrow dot" data-reveal>Certified quality</p>
+      <h2 class="h2" id="iso-t" data-reveal style="margin-top:16px">ISO 9001: the same process, <em>every order.</em></h2>
+      <p class="lede" data-reveal style="margin-top:20px">Our quality management system is certified to ISO 9001, the international standard for quality management. It means documented procedures, trained people, recorded inspections and continual improvement, from the first quote to handover.</p>
+      <dl class="contact-list" data-reveal style="margin-top:28px"><div><dt>Certified by</dt><dd>{body_name}</dd></div><div><dt>Certificate</dt><dd>{cert_no}</dd></div></dl>
+      <p class="source-note" data-reveal style="margin-top:18px">Certificate available on request.</p>
+    </div>
+  </div>
+</section>
+<section class="sec" aria-labelledby="gl-t">
+  <div class="wrap split">
+    <div><p class="eyebrow dot" data-reveal>Safety and global markets</p><h2 class="h2" id="gl-t" data-reveal style="margin-top:16px">Built to compete <em>anywhere.</em></h2></div>
+    <div data-reveal style="--rd:1">
+      <p class="lede">Every product is designed around its published safety zone and made to {SAFETY}. Each one carries a code, dimensions, platform height, age range and safety zone, the documentation international buyers and consultants expect.</p>
+      <ul class="checklist" style="margin-top:24px">
+        <li><span><b>Safety standard</b>{std}</span></li>
+        <li><span><b>Published safety zones</b>For every product with a fixed zone, used in every layout we draw. <a class="link-plain" href="/planning-guide/">How safety zones work</a></span></li>
+        <li><span><b>Full specification</b>Codes and dimensions for every product, ready for tender documents.</span></li>
+        <li><span><b>Our wooden outdoor range</b>The {COUNT} products in our outdoor collections are made by our manufacturing partner Soliwood in Cairo, and supplied and installed by Dupedia. <a class="link-plain" href="/playgrounds/">See the range</a></span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+{cta_band(title="See it made, then see it <em>built.</em>", text="Tell us about your project. We can walk you through materials, finishes and the quality checks behind your order.")}'''
+    ld = [{"@type": "AboutPage", "name": "Our factory and manufacturing process", "url": BASE + "/our-factory/", "about": {"@id": BASE + "/#org"}}]
+    page("/our-factory/", "Our factory: ISO 9001 certified playground manufacturing",
+         "How Dupedia manufactures playground equipment: selected materials, quality control at every stage, an ISO 9001 certified quality system, and products made for international safety requirements and global markets.",
+         body, active="/our-factory/", ld=ld, crumbs=[("Home", "/"), ("Our factory", "/our-factory/")])
+
+
+# ------------------------------------------------------------------ CEO note (text supplied by Adham El Kashef, 7 Nov 2026, unchanged)
+CEO = {"name": "Adham El Kashef", "title": "Founder & CEO, Dupedia"}
+CEO_PARAS = [
+    "At Dupedia, we believe that a playground is much more than a place to play. It is where imagination takes shape, friendships begin, confidence grows, and unforgettable childhood memories are created.",
+    "For us, creating a playground is an art. It starts with understanding the people who will use it, imagining the possibilities, and transforming ordinary spaces into extraordinary experiences.",
+    "Every curve, every colour, every structure, and every detail has a purpose. We bring together creativity, thoughtful design, safety, and quality craftsmanship to create environments that inspire children to explore, discover, and dream without limits.",
+    "Whether it is a school, a resort, a community, or a destination for family entertainment, our ambition remains the same: to create spaces that bring people together and make life a little more joyful.",
+    "I am proud of what we create, but even prouder of the smiles, laughter, and memories that our work leaves behind.",
+]
+CEO_CLOSE = "Because at Dupedia, we are not just building playgrounds. We are creating the places where the best stories of childhood begin."
+CEO_IMG = '<img src="/img/ceo-portrait.jpg" srcset="/img/ceo-portrait-760.jpg 760w, /img/ceo-portrait.jpg 1520w" sizes="(max-width: 900px) 92vw, 34vw" width="1520" height="2020" loading="lazy" decoding="async" alt="Adham El Kashef, Founder and CEO of Dupedia, in a black jacket in front of a framed photograph, black-and-white portrait.">'
+
+SIG_N = [0]
+def signature(cls="sig"):
+    """Freehand signature (Herr Von Muellerhoff, SIL OFL): tilted, with an ink wobble and a pen flourish under the name.
+    The cursive ink is revealed left to right by a scroll-controlled mask."""
+    SIG_N[0] += 1; fid = f"ink{SIG_N[0]}"
+    return (f'<svg class="{cls}" viewBox="0 0 640 260" role="img" aria-label="Signed, Adham El Kashef" data-sign>'
+            f'<defs><filter id="{fid}" x="-5%" y="-20%" width="110%" height="140%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7"/>'
+            f'<feDisplacementMap in="SourceGraphic" scale="2.4"/></filter>'
+            f'<mask id="{fid}-write" maskUnits="userSpaceOnUse" x="0" y="0" width="640" height="260"><path class="sig-pen" pathLength="1" d="M40 112 C140 98 210 112 290 106 S470 98 600 104" fill="none" stroke="white" stroke-width="210" stroke-linecap="butt"/></mask></defs>' 
+            f'<g transform="rotate(-8 320 130)" filter="url(#{fid})">'
+            f'<text x="320" y="150" text-anchor="middle" mask="url(#{fid}-write)">Adham El Kashef</text>'
+            f'<path class="sig-flourish" d="M118 178 C 210 166, 330 162, 452 160 C 520 159, 560 150, 548 138 C 538 128, 506 146, 528 170 C 540 184, 578 182, 604 168"/>'
+            f'</g></svg>')
+
+def ceo_photo(extra=""):
+    return f"""<figure class="ceo2-photo {extra}">
+  <span class="ceo2-img">{CEO_IMG}</span>
+  <span class="ceo2-shade" aria-hidden="true"></span>
+  <figcaption>{signature()}<span class="ceo2-role">Founder &amp; CEO, Dupedia</span></figcaption>
+</figure>"""
+
+def ceo_note():
+    lede, rest = CEO_PARAS[0], CEO_PARAS[1:]
+    paras = "".join(f'<p data-reveal>{e(x)}</p>' for x in rest)
+    close = words([("Because at Dupedia, we are not just building playgrounds. We are creating", False), ("the places where the best stories of childhood begin.", True)])
+    return f"""<section class="ceo2" id="ceo-note" aria-labelledby="ceo-t">
+  <div class="ceo2-grid">
+    <div class="ceo2-media"><span class="ceo2-ball" aria-hidden="true"></span>{ceo_photo()}</div>
+    <article class="ceo2-letter">
+      <p class="eyebrow dot" data-reveal>A note from our CEO</p>
+      <h2 class="display" id="ceo-t" data-reveal style="margin-top:22px">The art of creating <em>play.</em></h2>
+      <p class="ceo2-lede" data-reveal>{e(lede)}</p>
+      <div class="ceo2-body">{paras}</div>
+      <p class="stmt ceo2-close">{close}</p>
+      <div class="ceo2-sign" data-reveal>
+        <span class="ceo2-warm">With warmth,</span>
+        <span class="ceo2-name"><b>{e(CEO["name"])}</b>{e(CEO["title"])}</span>
+      </div>
+    </article>
+  </div>
+</section>"""
+
+def ceo_teaser():
+    close = words([("Because at Dupedia, we are not just building playgrounds. We are creating", False), ("the places where the best stories of childhood begin.", True)])
+    return f"""<section class="ceo2 ceo2-teaser" aria-labelledby="ceot-t">
+  <div class="ceo2-grid">
+    <div class="ceo2-media"><span class="ceo2-ball" aria-hidden="true"></span>{ceo_photo("ceo2-short")}</div>
+    <div class="ceo2-letter">
+      <p class="eyebrow dot" data-reveal id="ceot-t">A note from our CEO</p>
+      <p class="stmt ceo2-close" style="margin-top:28px">{close}</p>
+      <p class="ceo2-name" data-reveal style="margin-top:28px"><b>{e(CEO["name"])}</b>{e(CEO["title"])}</p>
+      <p data-reveal style="margin-top:28px"><a class="btn" href="/about/#ceo-note" data-magnetic>Read the full note {ARROW}</a></p>
+    </div>
+  </div>
+</section>"""
+
+
+# ------------------------------------------------------------------ planning and design (copy supplied by Dupedia, 7 Nov 2026)
+PLAN_CONSIDER = ["Available area", "Dimensions", "Site conditions", "Age groups", "Functionality", "Safety requirements", "The right materials"]
+PLAN_STEPS = [("Concept and space planning", "Your vision, the space and the people who will use it, turned into a first layout."),
+              ("Product selection", "The right equipment for the space, the ages and the experience you want."),
+              ("Material recommendations", "Materials chosen for the environment: sun, sand, heavy use or indoor."),
+              ("Detailed design", "Every decision documented, with a clear purpose, ready to build.")]
+PLAN_TABS = [("schools", "A school"), ("hotels", "A luxury resort"), ("developers", "A residential community"), ("operators", "A family entertainment destination")]
+
+def planning_section():
+    sect = {s[0]: s for s in SECTORS}
+    chips = "".join(f'<li data-reveal style="--rd:{i}"><span class="tick" aria-hidden="true">{ic("check", "ic ic-s")}</span>{x}</li>' for i, x in enumerate(PLAN_CONSIDER))
+    steps = "".join(f'<li data-reveal style="--rd:{i}"><span class="ps-n">0{i + 1}</span><h3>{n}</h3><p>{d}</p></li>' for i, (n, d) in enumerate(PLAN_STEPS))
+    tabs = "".join(f'<button type="button" role="tab" id="pt-{k}" aria-controls="pp-{k}" aria-selected="{"true" if i == 0 else "false"}" tabindex="{0 if i == 0 else -1}">{lbl}</button>' for i, (k, lbl) in enumerate(PLAN_TABS))
+    panels = "".join(f'<div role="tabpanel" id="pp-{k}" aria-labelledby="pt-{k}" class="pt-panel"{"" if i == 0 else " hidden"}><p>{sect[k][5]}</p><a class="link" href="/who-we-work-with/#{k}">How we approach {sect[k][1].lower()} {ARROW}</a></div>' for i, (k, _) in enumerate(PLAN_TABS))
+    close = words([("We don't just fill spaces with equipment. We transform them into", False), ("experiences designed around the people who use them.", True)])
+    return f"""<section class="sec plan" id="planning" aria-labelledby="plan-t">
+  <div class="wrap">
+    <div class="plan-grid">
+      <figure class="plan-photo" data-reveal><span class="plan-stage"><span class="plan-quarter" aria-hidden="true"></span><img src="/img/planning-team-cutout.webp" width="923" height="1455" loading="lazy" decoding="async" alt="Two members of a planning team in business dress reviewing notes on a tablet and a notebook, black-and-white cut-out."></span></figure>
+      <div class="plan-copy">
+        <p class="eyebrow dot" data-reveal>Planning and design</p>
+        <h2 class="h1" id="plan-t" data-reveal style="margin-top:18px">Beyond supplying. We create <em>experiences.</em></h2>
+        <p class="plan-sub" data-reveal>Thoughtful planning · Purposeful design · The right solutions</p>
+        <div class="plan-body">
+          <p data-reveal>At Dupedia, we believe that every space has its own character, and every project deserves a solution designed around its unique needs.</p>
+          <p data-reveal>Our work begins long before installation. Our planning and design team works closely with each client to understand their vision, the nature of the space, the target audience, and the experience they want to create.</p>
+        </div>
+        <h3 class="plan-h" data-reveal>What we consider, every time</h3>
+        <ul class="consider">{chips}</ul>
+      </div>
+    </div>
+    <div class="plan-steps-wrap">
+      <p class="plan-lead" data-reveal>From the initial concept and space planning to product selection, material recommendations, and detailed design, every decision is made with a clear purpose.</p>
+      <ol class="plan-steps">{steps}</ol>
+    </div>
+    <div class="plan-tabs-wrap">
+      <div>
+        <h3 class="h2" data-reveal>No one-size-fits-<em>all.</em></h3>
+        <p class="lede" data-reveal style="margin-top:18px">A school, a luxury resort, a residential community, and a family entertainment destination each require a different approach.</p>
+      </div>
+      <div class="ptabs" data-tabs data-reveal>
+        <div role="tablist" aria-label="Kinds of project">{tabs}</div>
+        {panels}
+      </div>
+    </div>
+    <p class="plan-goal" data-reveal>Our goal is to make the best use of every space, balance creativity with practicality, and deliver solutions that are beautiful, functional, durable, and built to last.</p>
+    <p class="stmt plan-close">{close}</p>
+  </div>
+</section>"""
+
+
+# ------------------------------------------------------------------ Dupedia X FORCE (owner's brief, 8 Nov 2026)
+# Every "In X FORCE today" item below is a feature that exists in X FORCE (see X FORCE 1.1 docs: order stages, engineering
+# queue and handover packs, production stages incl. quality inspection and rework, deadline status, teams, chat and
+# notifications, payment verification, sales view of production progress, AI-assisted Market Intelligence).
+# Nothing here describes a client portal, live client dashboard, logistics module or AI that X FORCE does not have.
+XF_NODES = [
+    ("eng", "Engineering &amp; design", "Planning, technical drawings, specifications and project development.",
+     ["Engineering queue and assignment", "A handover pack for every order", "Technical files and plan exports", "Deadlines with full change history"], (17.1, 30)),
+    ("mfg", "Manufacturing", "Production connected to each project's requirements and progress.",
+     ["Production jobs tracked stage by stage", "In-house, outsourced or mixed production", "Ready-to-manufacture gates", "Workers and teams on every job"], (50, 10)),
+    ("qc", "Quality control", "Every production stage monitored against our quality standards.",
+     ["A dedicated quality inspection stage", "Rework flagged and tracked to completion", "Every stage change recorded", "Stage gates before a job is complete"], (82.9, 30)),
+    ("pm", "Project management", "Timelines, teams and progress coordinated in one place.",
+     ["One stage timeline for every order", "On track, at risk or delayed, at a glance", "Holds and delays must be explained", "A management control centre"], (82.9, 70)),
+    ("ins", "Installation", "Installation and technical teams connected with management and the factory.",
+     ["Installing and completed stages per project", "Teams assigned and visible", "Company-wide chat and notifications", "Site issues raised to the right people"], (50, 90)),
+    ("cx", "Client experience", "Clearer communication, better coordination and real project visibility.",
+     ["Your Dupedia contact sees production progress and deadlines", "Payments recorded and verified", "One project reference across every department", "Proposals with your site plan"], (17.1, 70)),
+]
+XF_STAGES = ["Quotation issued", "Client accepted", "Engineering", "Production", "Ready", "Installation", "Completed"]
+
+def xf_icon(k):
+    P = {
+        "eng": '<path d="M4 20h16"/><path d="M6 20V9l6-5 6 5v11"/><path d="M10 20v-5h4v5"/>',
+        "mfg": '<path d="M3 20V10l5 3V10l5 3V6l8 4v10z"/><path d="M7 17h2M12 17h2M17 17h1"/>',
+        "qc": '<path d="M12 3 4 6v6c0 4.5 3.4 8 8 9 4.6-1 8-4.5 8-9V6z"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
+        "pm": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 13h3M8 16h6"/>',
+        "ins": '<path d="M14 6a4 4 0 0 0-5.6 5.2L3 16.6 7.4 21l5.4-5.4A4 4 0 0 0 18 10l-2.6 2.6-3-3z"/>',
+        "cx": '<path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8M8 13h5"/>',
+    }[k]
+    return f'<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">{P}</svg>'
+
+def xforce_section():
+    W, H, hx, hy = 1000, 640, 500, 320
+    pts = [(x / 100 * W, y / 100 * H) for *_, (x, y) in XF_NODES]
+    spokes = "".join(f'<path id="xfs{i}" class="xf-spoke" data-i="{i}" d="M{hx} {hy} L{px:.0f} {py:.0f}"/>' for i, (px, py) in enumerate(pts))
+    ring = "M" + " L".join(f"{px:.0f} {py:.0f}" for px, py in pts) + " Z"
+    packets = "".join(
+        f'<circle class="xf-pkt" r="4"><animateMotion dur="{2.6 + i * .35:.2f}s" repeatCount="indefinite" begin="{i * .4:.1f}s" keyPoints="{"0;1" if i % 2 else "1;0"}" keyTimes="0;1" calcMode="linear"><mpath href="#xfs{i}"/></animateMotion></circle>'
+        for i in range(len(pts)))
+    ring_pkts = "".join(f'<circle class="xf-pkt xf-pkt-ring" r="3"><animateMotion dur="14s" repeatCount="indefinite" begin="{-i * 14 / 3:.2f}s"><mpath href="#xfring"/></animateMotion></circle>' for i in range(3))
+    nodes = "".join(
+        f'<button type="button" class="xf-node" data-i="{i}" style="left:{x}%;top:{y}%" aria-pressed="{"true" if i == 0 else "false"}" aria-controls="xf-detail">'
+        f'<span class="xf-num">0{i + 1}</span>{xf_icon(k)}<span class="xf-name">{n}</span><span class="xf-bar" aria-hidden="true"><i></i></span></button>'
+        for i, (k, n, d, f, (x, y)) in enumerate(XF_NODES))
+    data = json.dumps([{"n": html.unescape(n), "d": d, "f": f} for k, n, d, f, _ in XF_NODES])
+    first = XF_NODES[0]
+    stages = "".join(f'<li style="--i:{i}"><span class="xf-dot" aria-hidden="true"></span>{s}</li>' for i, s in enumerate(XF_STAGES))
+    return f"""<section class="sec xf" id="x-force" aria-labelledby="xf-t">
+  <div class="xf-grid-bg" aria-hidden="true"></div>
+  <div class="wrap">
+    <div class="xf-head">
+      <p class="eyebrow dot" data-reveal>Dupedia X FORCE · our own operating system</p>
+      <h2 class="h1" id="xf-t" data-reveal style="margin-top:18px">Beyond manufacturing. Powered by <em>intelligence.</em></h2>
+      <p class="xf-sub" data-reveal>Meet the new era of playground solutions.</p>
+    </div>
+    <div class="xf-intro">
+      <p class="lede" data-reveal>At Dupedia, innovation goes beyond the products we create. We are pioneering a technology-led, AI-assisted approach to the playground and leisure industry, where every stage of our operation is connected through our own operating system, Dupedia X FORCE.</p>
+      <div class="xf-intro-2" data-reveal style="--rd:1">
+        <p>From the first engineering drawings to manufacturing, quality control and final installation, X FORCE keeps our teams connected, our operations coordinated and every project moving forward.</p>
+        <p>By connecting our factory, engineers, management and technical teams through one system, we keep greater visibility, stronger coordination and control throughout the whole project journey. Because an exceptional playground starts long before installation.</p>
+      </div>
+    </div>
+
+    <div class="xf-console" data-xf data-reveal>
+      <div class="xf-bar-top" aria-hidden="true"><span class="xf-lights"><i></i><i></i><i></i></span><span class="xf-title">X FORCE · operations network</span><span class="xf-live"><i></i>Connected</span></div>
+      <div class="xf-eco">
+        <svg class="xf-links" viewBox="0 0 {W} {H}" aria-hidden="true">
+          <path id="xfring" class="xf-ring" d="{ring}"/>
+          {spokes}{packets}{ring_pkts}
+        </svg>
+        <div class="xf-hub" aria-hidden="true">
+          <span class="xf-orbit o1"></span><span class="xf-orbit o2"></span><span class="xf-orbit o3"></span>
+          <span class="xf-core"><b>X FORCE</b><small>by Dupedia</small></span>
+        </div>
+        <div class="xf-nodes" role="group" aria-label="Departments connected by X FORCE">{nodes}</div>
+      </div>
+      <div class="xf-detail" id="xf-detail" aria-live="polite">
+        <div><p class="xf-step">Stage <b id="xf-d-num">01</b> of 0{len(XF_NODES)}</p><h3 id="xf-d-name">{first[1]}</h3><p id="xf-d-desc">{first[2]}</p></div>
+        <div><p class="xf-step">In X FORCE today</p><ul id="xf-d-list">{"".join(f"<li>{x}</li>" for x in first[3])}</ul></div>
+      </div>
+      <script type="application/json" id="xf-data">{data}</script>
+    </div>
+
+    <div class="xf-journey" data-reveal>
+      <div class="xf-j-head"><h3 class="h3">Every project, one <em>timeline.</em></h3>
+        <p class="xf-legend"><span><i style="--c:var(--lime)"></i>On track</span><span><i style="--c:var(--sun)"></i>At risk</span><span><i style="--c:var(--coral)"></i>Delayed</span></p></div>
+      <ol class="xf-track">{stages}</ol>
+      <p class="source-note">The order stages and deadline statuses X FORCE tracks for every project, shared by sales, engineering, the factory and installation.</p>
+    </div>
+
+    <div class="xf-close">
+      <figure class="xf-field" data-reveal><span class="xf-field-ball" aria-hidden="true"></span><img src="/img/xforce-field.webp" width="721" height="649" loading="lazy" decoding="async" alt="A site engineer in a hard hat and safety vest checking a tablet, black-and-white cut-out."></figure>
+      <div>
+        <div class="xf-ai" data-reveal><p class="xf-step">Where AI works today</p><p>X FORCE uses AI to research markets and prospective projects, and labels every finding as source-backed or AI interpretation, so our people make the decisions with the facts in front of them.</p></div>
+        <p class="xf-statement" data-reveal>One vision. One connected system. <em>Every detail under control.</em></p>
+        <p data-reveal style="margin-top:28px"><a class="btn" href="/contact/" data-magnetic>Start a project with us {ARROW}</a></p>
+      </div>
+    </div>
+  </div>
+</section>"""
+
+
+# ------------------------------------------------------------------ X FORCE intro (replaces "Featured products", owner brief 8 Nov 2026)
+# Headline: the owner's preferred "Egypt's first..." claim is not verifiable, so the brief's fallback is used.
+# Stage copy only describes what X FORCE does today (production stages, quality inspection and rework, safety-zone
+# checks on layouts, installation on the shared timeline). AI in X FORCE is research, so it is called "AI-assisted".
+XFI_STAGES = [
+    ("mfg", "Planning &amp; engineering", "PLAN", "Sales, design and engineering work from one project record, so drawings, quantities and timelines stay connected from the first brief."),
+    ("qc", "Manufacturing &amp; quality", "MAKE", "Production is tracked stage by stage against each project. A dedicated inspection step sends anything that fails to rework, and it stays visible until it passes."),
+    ("safe", "Safety &amp; coordination", "SAFE", "Layouts are checked against each product's published safety zone, and every team sees holds, delays and decisions as they happen."),
+    ("ins", "Installation &amp; handover", "BUILD", "Site teams, the factory and project management share one timeline through to handover, so the client deals with one connected team."),
+]
+
+def xforce_intro():
+    def words(text, start=0):
+        out = []
+        for k, w in enumerate(text.split(" ")):
+            out.append(f'<span class="xw"><span style="--i:{start + k}">{w}</span></span>')
+        return " ".join(out)
+    h = (f'<span class="xl">{words("An", 0)} <span class="xw xw-ai"><span style="--i:1"><em>AI-powered</em></span></span></span> '
+         f'<span class="xl">{words("company. Built around", 2)}</span> '
+         f'<span class="xl">{words("intelligent operations.", 5)}</span>')
+    links = ["AI-powered business operations", "Intelligent internal systems", "Connected manufacturing &amp; engineering",
+             "Smarter planning &amp; execution", "Live coordination between teams", "A connected client experience"]
+    chips = "".join(f'<li data-reveal style="--rd:{k}">{c}</li>' for k, c in enumerate(links))
+    stages = "".join(
+        f'<li class="xfi-st" data-i="{i}"><span class="xfi-node shp-{k}" aria-hidden="true"><i></i></span>'
+        f'<span class="xfi-n">0{i + 1}</span><h3>{n}</h3><p>{d}</p><span class="xfi-tag">Connected in X FORCE</span></li>'
+        for i, (k, n, w, d) in enumerate(XFI_STAGES))
+    big = "".join(f'<span data-i="{i}">' + "".join(f'<b style="--l:{j}">{ch}</b>' for j, ch in enumerate(w)) + '</span>' for i, (k, n, w, d) in enumerate(XFI_STAGES))
+    leds = "".join(f'<span data-i="{i}"><i></i>{n}</span>' for i, (k, n, w, d) in enumerate(XFI_STAGES))
+    return f"""<section class="xfi" id="powered-by-ai" aria-labelledby="xfi-t">
+  <div class="xfi-texture" aria-hidden="true"></div>
+  <div class="wrap xfi-intro">
+    <p class="eyebrow dot" data-reveal>Dupedia X FORCE · AI-powered operations</p>
+    <h2 class="xfi-h" id="xfi-t" data-reveal>{h}</h2>
+    <div class="xfi-lead">
+      <p class="lede" data-reveal>Dupedia runs on X FORCE, our own AI-powered operational ecosystem. It connects sales, planning, engineering, manufacturing, project management and installation, so our people, processes, data and projects work from one live, shared picture. X FORCE doesn’t build playgrounds. Our teams do. It keeps them connected, informed and a step ahead.</p>
+      <p class="xfi-motto" data-reveal><span>Built smarter.</span> <span>Checked harder.</span> <span>Delivered <em>safer.</em></span></p>
+    </div>
+    <ul class="xfi-chips" aria-label="What X FORCE connects">{chips}</ul>
+  </div>
+  <div class="xfi-scroll" data-xfi>
+    <div class="xfi-pin">
+      <div class="xfi-big" aria-hidden="true">{big}</div>
+      <div class="wrap xfi-grid">
+        <figure class="xfi-photo xfi-cut">
+          <span class="xfi-cutin"><span class="xfi-disc" aria-hidden="true"></span><img src="/img/xforce-engineer.webp" width="640" height="984" loading="lazy" decoding="async" alt="A Dupedia engineer in a hard hat and safety glasses checking project details on a tablet, black and white."></span>
+          <figcaption class="xfi-sign"><span class="rope l" aria-hidden="true"></span><span class="rope r" aria-hidden="true"></span><span class="board"><i aria-hidden="true"></i>X FORCE <span class="sep" aria-hidden="true">·</span> <span id="xfi-now">{XFI_STAGES[0][1]}</span></span></figcaption>
+          <span class="xfi-pile" aria-hidden="true"><b class="p0"></b><b class="p1"></b><b class="p2"></b><b class="p3"></b></span>
+          <span class="xfi-leds" aria-hidden="true">{leds}</span>
+        </figure>
+        <div class="xfi-flow">
+          <p class="xfi-flow-h">One connected system, every stage</p>
+          <ol class="xfi-stages"><span class="xfi-line" aria-hidden="true"><i class="xfi-ball"><b></b></i></span>{stages}</ol>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="wrap xfi-out"></div>
+</section>"""
+
+# ------------------------------------------------------------------ static files, sitemap, robots
+def write_static():
+    if OUT.exists(): shutil.rmtree(OUT)
+    OUT.mkdir(parents=True)
+    shutil.copytree(STATIC, OUT, dirs_exist_ok=True)
+    (OUT / "assets").mkdir(exist_ok=True)
+    shutil.copy(SRC / "assets" / "site.css", OUT / "assets" / "site.css")
+    shutil.copy(SRC / "assets" / "site.js", OUT / "assets" / "site.js")
+    shutil.copy(SRC / "assets" / "motion.js", OUT / "assets" / "motion.js")
+    (OUT / "assets" / "catalog.js").write_text(CATALOG)
+
+def write_meta():
+    urls = "".join(f"<url><loc>{BASE}{u}</loc><lastmod>{TODAY}</lastmod></url>" for u in PAGES)
+    (OUT / "sitemap.xml").write_text(f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>\n')
+    robots = "User-agent: *\nDisallow: /\n# Review build: set siteUrl in src/config.json to publish.\n" if REVIEW else f"User-agent: *\nAllow: /\n\nSitemap: {BASE}/sitemap.xml\n"
+    (OUT / "robots.txt").write_text(robots)
+    (OUT / "site.webmanifest").write_text(json.dumps({"name": "Dupedia", "short_name": "Dupedia", "start_url": "/", "display": "browser",
+        "background_color": "#FBFAF6", "theme_color": "#FBFAF6", "icons": [{"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}]}, indent=1))
+    (OUT / "_headers").write_text("""/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  X-Frame-Options: SAMEORIGIN
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+/img/*
+  Cache-Control: public, max-age=2592000
+/brand/*
+  Cache-Control: public, max-age=2592000
+""")
+
+if __name__ == "__main__":
+    CATALOG = catalog_js(); CAT_V = hashlib.sha1(CATALOG.encode()).hexdigest()[:10]
+    write_static()
+    build_home(); build_playgrounds(); build_products(); build_divisions(); build_sectors()
+    build_guide(); build_about(); build_factory(); build_contact(); build_privacy(); build_404()
+    from i18n.build_ar import build as build_ar
+    build_ar(OUT, PAGES, BASE)
+    write_meta()
+    for k, v in CFG["contact"].items():
+        if not v: WARN.append(f"contact.{k} not supplied: [TBC] shown on the page")
+    if REVIEW: WARN.insert(0, "siteUrl not set: REVIEW build (noindex, robots Disallow, canonical uses siteUrlPreview)")
+    if not CFG.get("formEndpoint"): WARN.append("formEndpoint not set: the form shows the request as text to copy and says it was not sent")
+    print(f"Built {len(PAGES)} pages into {OUT.relative_to(ROOT)}/")
+    for w in WARN: print("  ! " + w)

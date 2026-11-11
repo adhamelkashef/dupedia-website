@@ -1,0 +1,36 @@
+{
+  "_readme": "Business facts and integrations. null = not supplied yet: the page shows a visible [TBC] placeholder (review build) and the build prints a warning. Never fill these with guesses.",
+  "siteUrl": null,
+  "siteUrlPreview": "https://dupedia.example",
+  "contact": {
+    "phone": null,
+    "whatsapp": null,
+    "email": null,
+    "address": null,
+    "city": null,
+    "hours": null
+  },
+  "social": {
+    "instagram": null,
+    "linkedin": null,
+    "facebook": null
+  },
+  "formEndpoint": "",
+  "analytics": {
+    "plausibleDomain": null
+  },
+  "serviceArea": [
+    "Egypt"
+  ],
+  "clientsCredit": "dupedia",
+  "_clientsCredit": "Client names from soliwood.org (checked 7 Nov 2026). Owner confirmed on 7 Nov 2026 that Dupedia delivered these projects, so they are shown as Dupedia clients. 'manufacturer' would credit Soliwood instead.",
+  "iso9001": {
+    "certified": true,
+    "certificationBody": null,
+    "certificateNumber": null,
+    "scope": null,
+    "_note": "Owner stated on 7 Nov 2026 that Dupedia is ISO 9001 certified. ISO does not allow certified companies to use the ISO logo; show the certification body's mark instead (add its file to static/brand/ and the name here)."
+  },
+  "safetyStandard": null,
+  "_safetyStandard": "Name the playground safety standard(s) the products are made to, e.g. 'EN 1176 and EN 1177'. Until set, the site says 'international playground safety requirements' and shows [TBC]."
+}
