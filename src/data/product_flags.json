@@ -1,0 +1,94 @@
+{
+ "SW-A411": [
+  [
+   "high",
+   "Source image is the same photograph as SW-A405 Palm Grove Agility Set (re-encoded, visually identical) and does not show the corn-themed pavilion, climbing wall or rope net described. Image withheld from the catalogue; a genuine photograph is needed."
+  ]
+ ],
+ "SW-A405": [
+  [
+   "info",
+   "Its image is also used on the source site for SW-A411. The image matches the A405 description (palm posts, monkey bars, rock-hold ramp, balance decks), so it is kept here."
+  ],
+  [
+   "medium",
+   "Dimensions L 7.49 × W 5.15 m repeat the exact figures of SW-Y307's safety zone (7.49 × 5.15 m). Possible copy error on the source; confirm."
+  ]
+ ],
+ "SW-A407": [
+  [
+   "medium",
+   "Source uses the same photograph (re-encoded) for SW-A407 and SW-A412. The image shows continuous upper rails and yellow rope balustrades, which fits both descriptions. Confirm which product it shows, or supply a second photograph."
+  ],
+  [
+   "info",
+   "Width and height (W 0.63 × H 1.20 m) are identical to SW-A408 See Saw. Plausible, but confirm."
+  ]
+ ],
+ "SW-A412": [
+  [
+   "medium",
+   "Shares the same photograph as SW-A407 on the source site (see SW-A407). The yellow rope balustrades in the image match this product's description."
+  ]
+ ],
+ "SW-A401": [
+  [
+   "medium",
+   "Product name says 30 m, but the dimensions give L 12.00 m (supports) and the safety zone is 20.00 × 2.20 m. The zipline run length is not stated; confirm."
+  ]
+ ],
+ "SW-A402": [
+  [
+   "medium",
+   "Safety zone (3.50 × 1.20 m) is smaller than the product itself (L 4.00 × W 1.20 m). Confirm."
+  ]
+ ],
+ "SW-L503": [
+  [
+   "medium",
+   "Safety zone ('Segment 3.95 × 2.50 m') is smaller than one arc (L 6.84 × W 3.52 m). Confirm whether figures refer to different segments."
+  ]
+ ],
+ "SW-L507": [
+  [
+   "medium",
+   "Safety zone length (4.40 m) is shorter than the bench (L 4.43 m). Confirm."
+  ]
+ ],
+ "SW-Y304": [
+  [
+   "medium",
+   "Safety zone 0.77 m² equals the product footprint (1.08 × 0.71 m = 0.77 m²), leaving no free space around it. Confirm."
+  ]
+ ],
+ "SW-Y312": [
+  [
+   "medium",
+   "Seat height 54 cm is essentially the overall height (H 54.1 cm). Confirm seat height."
+  ]
+ ],
+ "SW-E111": [
+  [
+   "info",
+   "The 'Platform Height' field gives a platform size (1.15 × 1.15 m), not a height. Height not stated."
+  ]
+ ],
+ "SW-Y302": [
+  [
+   "info",
+   "Named 'Toddler House' but listed for 3–12 years. Shown as published."
+  ]
+ ],
+ "SW-T204": [
+  [
+   "info",
+   "Safety zone given as an area only (24.45 m²), no length × width."
+  ]
+ ],
+ "SW-T205": [
+  [
+   "info",
+   "Safety zone given as an area only (19.41 m²), no length × width."
+  ]
+ ]
+}

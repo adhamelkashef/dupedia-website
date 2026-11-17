@@ -1,0 +1,1 @@
+document.querySelectorAll("[data-language-switch]").forEach(a=>{const base=a.getAttribute("href");const update=()=>{a.href=base+location.search+location.hash;};update();a.addEventListener("click",update);});
