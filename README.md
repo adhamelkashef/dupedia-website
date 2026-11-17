@@ -1,10 +1,8 @@
+> **Live edition:** Codex — Serious about play intro, pirate ship assembly, white-background products and 3D viewers. Employee access is beside the language switch. Production: https://www.dupediaeg.com.
+
 # Dupedia — Product-led redesign
 
 A standalone redesign based on `../dupedia-site`, preserving the earlier editions. White and graphite, the original lime accent, system sans-serif typography, large product visuals, and restrained GSAP motion.
-
-## Play environments edition (Claude, latest)
-
-Homepage (`src/claude_home.py`) and Projects page rebuilt around the catalogue's lifestyle photography; a site-wide design layer (`src/assets/claude.css`, self-hosted Archivo + Alexandria fonts in `src/assets/fonts/`) restyles every page in English and Arabic. New Arabic strings live in `src/i18n/ar-claude.json`. Codex's previous homepage (`src/premium_home.py`) is kept for rollback, and the Codex snapshot is on branch `codex-baseline`. Audit, tests and before/after screenshots: `qa/showdown/REPORT.md`.
 
 ## Preview
 
@@ -34,9 +32,9 @@ The existing site checker validates 170 HTML files and 168 sitemap routes: title
 
 ## Launch configuration
 
-The existing business configuration is incomplete: phone, email, address, hours, social links and form delivery are not configured. The enquiry form retains the original honest copy/export fallback and does not claim requests are sent. The production domain is configured as `https://www.dupediaeg.com` and indexing is enabled. Product images are existing manufacturer visuals, not completed Dupedia project photography.
+The existing business configuration is incomplete: phone, email, address, hours, social links and form delivery are not configured. The enquiry form retains the original honest copy/export fallback and does not claim requests are sent. The site remains `noindex` until a domain is configured. Product images are existing manufacturer visuals, not completed Dupedia project photography.
 
-The latest bilingual website is deployed on Cloudflare Pages (Free plan) at https://www.dupediaeg.com and https://dupediaeg.com. The checked-in `public/` directory contains the published website. See `DEPLOYMENT.md` for deployment details.
+The website is published on Cloudflare Pages (Free plan). See `DEPLOYMENT.md`.
 
 ## Playful homepage update
 

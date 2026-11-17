@@ -6,7 +6,6 @@ HERE=Path(__file__).parent
 D=json.loads((HERE/'ar.json').read_text()); PARTS=json.loads((HERE/'parts-ar.json').read_text())
 def norm(s):return ' '.join(s.replace('\xa0',' ').split())
 D={norm(k):v for k,v in D.items()}
-D.update({norm(k):v for k,v in json.loads((HERE/'ar-claude.json').read_text()).items()})  # Claude redesign strings
 TERMS={**PARTS,**D}
 keys=sorted(TERMS,key=len,reverse=True)
 pattern=re.compile(r'(?<![A-Za-z])(?:'+ '|'.join(re.escape(k) for k in keys if k and k!='&')+r')(?![A-Za-z])',re.I)
@@ -122,7 +121,7 @@ def build(out,pages,site):
   # X FORCE headline and motto: written in Arabic, keeping the word spans the animation uses
   ar_source=re.sub(r'(<h2 class="xfi-h"[^>]*>).*?(</h2>)',lambda m:m[1]+'<span class="xl"><span class="xw"><span style="--i:0">شركة</span></span> <span class="xw"><span style="--i:1">تعمل</span></span> <span class="xw xw-ai"><span style="--i:2"><em>بالذكاء الاصطناعي.</em></span></span></span> <span class="xl"><span class="xw"><span style="--i:3">مبنية</span></span> <span class="xw"><span style="--i:4">على</span></span></span> <span class="xl"><span class="xw"><span style="--i:5">عمليات</span></span> <span class="xw"><span style="--i:6">ذكية.</span></span></span>'+m[2],ar_source,flags=re.S)
   ar_source=re.sub(r'(<p class="xfi-motto"[^>]*>).*?(</p>)',lambda m:m[1]+'<span>تصنيع أذكى.</span> <span>فحص أدق.</span> <span>تسليم <em>أكثر أمانًا.</em></span>'+m[2],ar_source,flags=re.S)
-  ar_source=ar_source.replace('</head>','<link rel="preload" href="/assets/fonts/alexandria-arabic.woff2" as="font" type="font/woff2" crossorigin>\n</head>',1)
+  ar_source=ar_source.replace('</head>','<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Readex+Pro:wght@400;500;600&display=swap">\n</head>',1)
   def schema(m):
    data=json.loads(m[2])
    def local(v):

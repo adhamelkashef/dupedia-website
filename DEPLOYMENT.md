@@ -1,9 +1,8 @@
-# Dupedia deployment
+# Dupedia live website
 
-Cloudflare Pages project: dupedia-website (Free plan).
+Production edition: Codex baseline (89e1ace), with the Serious about play intro, pirate-ship assembly and product 3D viewers. Claude redesign is preserved separately in dupedia-apple-edition.
 
-Published files: public/. No build command is needed to deploy the checked-in public files.
-
-Domains: https://www.dupediaeg.com and https://dupediaeg.com. DNS uses Cloudflare; registration remains at GoDaddy.
-
-Build locally with `python3 src/build.py`. Contact details and enquiry delivery remain unconfigured; the form provides a copy/export fallback.
+Cloudflare Pages project: dupedia-website, Free plan.
+Domains: https://www.dupediaeg.com and https://dupediaeg.com.
+Deploy public/ after python3 src/build.py and python3 qa/check_site.py.
+Employee access is beside the language switch and opens https://dupedia.adhamelkashef.workers.dev/.

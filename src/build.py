@@ -199,8 +199,9 @@ def header(active):
     <a class="hdr-logo" href="/" aria-label="Dupedia home"><img src="/brand/dupedia-logo-black.png" width="1570" height="346" alt="Dupedia"></a>
     <nav class="nav" aria-label="Main">{links}</nav>
     <div class="hdr-act">
+      <a class="header-employee" href="{e(EMPLOYEE_ACCESS_URL)}">Employee access</a>
       <a class="sl-pill" href="/contact/" data-sl-count hidden><span class="ball" aria-hidden="true"></span>Shortlist <span class="n">0</span></a>
-      <a class="header-careers employee-access" href="{e(EMPLOYEE_ACCESS_URL)}">Employee access</a><a class="header-careers" href="/careers/">Careers</a><a class="btn btn-s" href="/contact/">Request a quote</a>
+      <a class="header-careers" href="/careers/">Careers</a><a class="btn btn-s" href="/contact/">Request a quote</a>
       <button class="burger" type="button" aria-expanded="false" aria-controls="sheet" aria-label="Open menu"><span></span><span></span><span></span></button>
     </div>
   </div>
@@ -226,7 +227,7 @@ def footer():
   <div class="wrap">
     <div class="ftr-grid">
       <div class="ftr-brand">
-        <img src="/brand/dupedia-logo-white.png" width="1570" height="346" alt="Dupedia" loading="lazy">
+        <img src="/brand/dupedia-logo-black.png" width="1570" height="346" alt="Dupedia" loading="lazy">
         <p class="brandline"><span>Serious about <em>play.</em></span></p>
       </div>
       <div><h2>Explore</h2><ul>{"".join(f'<li><a href="{u}">{n}</a></li>' for n, u in NAV)}<li><a href="/careers/">Careers</a></li><li><a href="/contact/">Contact</a></li><li><a href="{e(EMPLOYEE_ACCESS_URL)}">Employee access</a></li></ul></div>
@@ -254,16 +255,9 @@ def cta_band(title="Tell us about your <em>space.</em>", text="Share the basics 
 
 PAGES = []  # (path, priority)
 
-TONES = {"/playgrounds/": "play", "/school-playgrounds/": "play", "/playgrounds-for-developers-compounds/": "play", "/soft-play/": "soft",
-         "/water-parks/": "water", "/playgrounds-for-hotels-resorts/": "water", "/arcade-games/": "arcade",
-         "/amusement-park-equipment/": "amuse", "/outdoor-furniture/": "furniture"}
-def tone_attr(path):
-    t = TONES.get(path) or ("play" if path.startswith("/playgrounds/") else None)
-    return f' data-tone="{t}"' if t else ""
-
 def page(path, title, desc, body, active=None, ld=None, catalog=False, og_image=None, robots=None, crumbs=None, lang="en", intro=False):
     """Write one page. path like '/playgrounds/' or '/404.html'."""
-    if path in ('/about/', '/our-factory/'):
+    if path in ('/about/', '/our-factory/', '/projects/'):
         from brand_pages import enrich
         body = enrich(path, body, globals())
     url = BASE + path
@@ -296,22 +290,26 @@ def page(path, title, desc, body, active=None, ld=None, catalog=False, og_image=
 <link rel="icon" href="/icon-512.png" type="image/png" sizes="512x512">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/site.webmanifest">
-<link rel="preload" href="/assets/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
-{'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="' + FONT_SIG + '">' if path in ('/about/',) else ""}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="{FONTS}">
+<link rel="stylesheet" href="{FONT_SIG}">
 <link rel="stylesheet" href="/assets/site.css?v={CSS_V}">
 <link rel="stylesheet" href="/assets/premium.css?v={ver(SRC / "assets" / "premium.css")}">
-<link rel="stylesheet" href="/assets/claude.css?v={ver(SRC / "assets" / "claude.css")}">
 <script>document.documentElement.classList.add("js");window.DP_CONFIG={json.dumps(cfg)};{INTRO_JS if intro else ""}</script>
 {'<script src="/assets/catalog.js?v=' + CAT_V + '" defer></script>' if catalog else ""}
 <script src="/assets/site.js?v={JS_V}" defer></script>
-{'<script src="/assets/vendor/gsap.min.js" defer></script><script src="/assets/vendor/ScrollTrigger.min.js" defer></script><script src="/assets/premium.js?v=' + ver(SRC / "assets" / "premium.js") + '" defer></script>' if path != "/" else '<script src="/assets/claude.js?v=' + ver(SRC / "assets" / "claude.js") + '" defer></script>'}
+<script src="/assets/vendor/gsap.min.js" defer></script>
+<script src="/assets/vendor/ScrollTrigger.min.js" defer></script>
+<script src="/assets/premium.js?v={ver(SRC / "assets" / "premium.js")}" defer></script>
+{'<script type="module" src="/assets/playground-3d.js?v=' + ver(SRC / "assets" / "playground-3d.js") + '"></script><script type="module" src="/assets/creative-process.js?v=' + ver(SRC / "assets" / "creative-process.js") + '"></script>' if path == "/" else ""}
 {'<script type="module" src="/assets/product-viewer.js?v=' + ver(SRC / "assets" / "product-viewer.js") + '"></script><script src="/assets/photo-materials.js?v=' + ver(SRC / "assets" / "photo-materials.js") + '" defer></script><script src="/assets/product-presentation.js?v=' + ver(SRC / "assets" / "product-presentation.js") + '" defer></script>' if path.startswith("/playgrounds/sw-") else ""}
-{'<link rel="stylesheet" href="/assets/brand-stories.css?v=' + ver(SRC / "assets" / "brand-stories.css") + '"><script src="/assets/brand-stories.js?v=' + ver(SRC / "assets" / "brand-stories.js") + '" defer></script>' if path in ('/about/', '/our-factory/') else ""}
+{'<link rel="stylesheet" href="/assets/brand-stories.css?v=' + ver(SRC / "assets" / "brand-stories.css") + '"><script src="/assets/brand-stories.js?v=' + ver(SRC / "assets" / "brand-stories.js") + '" defer></script>' if path in ('/about/', '/our-factory/', '/projects/') else ""}
 {'<script src="/assets/division-heroes.js?v=' + ver(SRC / "assets" / "division-heroes.js") + '" defer></script>' if path in ('/soft-play/','/water-parks/','/arcade-games/','/amusement-park-equipment/') else ""}
 {'<script src="/assets/careers.js?v=' + ver(SRC / "assets" / "careers.js") + '" defer></script>' if path == '/careers/' else ""}
 <script type="application/ld+json">{ldjson}</script>
 </head>
-<body{tone_attr(path)}>
+<body>
 {LOADER_HTML if intro else ""}{header(active)}
 <main id="main">
 {body}
@@ -543,9 +541,9 @@ def premium_fit():
     return fit
 
 def build_home():
-    from claude_home import render_home
+    from premium_home import render_home
     body = render_home(globals(), premium_fit())
-    page("/", "Dupedia · Play Environments for Resorts, Compounds &amp; Schools", "Dupedia designs, manufactures and installs playgrounds, soft play, water parks and outdoor furniture for resorts, developers and schools in Egypt. ISO 9001, since 1989.", body, catalog=True, og_image="/img/sw-e107-pirate-ship-fort-playground-equipment.webp")
+    page("/", "Dupedia · Serious about play", "Discover Dupedia: playgrounds, soft play, water parks, arcades and leisure spaces in Egypt. Explore our products and start planning your space.", body, catalog=True)
 
 def build_playgrounds():
     tiles = ""
@@ -1468,52 +1466,20 @@ def build_landings():
         page(url, e(en(x["title"])), en(x["desc"]), body, active=parent[1], ld=ld, crumbs=crumbs)
 
 def build_projects():
-    """Projects portfolio by sector. Client names are the owner-confirmed list in landing.json;
-    photographs are catalogue visuals of the kind of space each sector commissions, not site photos."""
     pj = LANDING["projects"]
-    chapters = [
-        ("SW-E101", "Forest House in a compound garden", "Play is one of the first amenities residents use. We plan it with the masterplan, phase by phase.", "/playgrounds-for-developers-compounds/", "Plan a compound playground"),
-        ("SW-E107", "Pirate Ship Fort on a resort beach", "A kids’ area that sits well in the landscape and stands up to sun, sand and constant use.", "/playgrounds-for-hotels-resorts/", "Plan a resort kids’ area"),
-        ("SW-T204", "Storm Flyer in a school yard", "Age-appropriate equipment that fits the yard you actually have, with every safety zone drawn first.", "/school-playgrounds/", "Plan a school playground"),
-        ("SW-E108", "Trampoline and play tower on a club lawn", "Play, water and entertainment for members and guests, built to work every day.", "/who-we-work-with/", "See who we work with"),
-    ]
-    rows = ""
-    for i, ((name, clients), (code, alt, line, url, cta)) in enumerate(zip(pj["groups"], chapters)):
-        p = BY[code]
-        names = "".join(f'<li translate="no">{e(c)}</li>' for c in clients)
-        rows += f"""<section class="cp-chapter{' cp-flip' if i % 2 else ''}" aria-labelledby="pg-{i}">
-  <figure class="cp-pic"><img src="/img/{p['imgbase']}.webp" srcset="/img/{p['imgbase']}-560.webp 560w, /img/{p['imgbase']}.webp 1100w" sizes="(max-width: 900px) 92vw, 50vw" width="1100" height="700" alt="{alt}" {'fetchpriority="high"' if i == 0 else 'loading="lazy"'} decoding="async"></figure>
-  <div class="cp-copy">
-    <h2 class="c-h2" id="pg-{i}">{e(en(name))}</h2>
-    <p class="cp-line">{line}</p>
-    <ul class="cp-clients">{names}</ul>
-    <a class="c-link" href="{url}">{cta} {ARROW}</a>
-  </div>
+    groups = ""
+    for i, (name, clients) in enumerate(pj["groups"]):
+        items = "".join(f'<li translate="no">{e(c)}</li>' for c in clients)
+        groups += f"""<section class="dsec" aria-labelledby="pg-{i}">
+  <div class="dsec-side" data-reveal><p class="code">{i + 1:02d}</p><h2 class="h2" id="pg-{i}">{e(en(name))}</h2></div>
+  <ul class="pj-list" data-reveal style="--rd:1">{items}</ul>
 </section>"""
-    n_clients = sum(len(c) for _, c in pj["groups"])
     crumbs = [("Home", "/"), ("Projects", "/projects/")]
-    body = f"""<section class="cp-hero" aria-labelledby="cp-t">
-  <div class="c-wrap">
-    <nav aria-label="Breadcrumb"><ol class="crumbs"><li><a href="/">Home</a></li><li aria-current="page">Projects</li></ol></nav>
-    <h1 id="cp-t" class="c-display cp-title">{e(en(pj["h1"][0]))} {e(en(pj["h1"][1]))}</h1>
-    <div class="cp-hero-foot"><p class="c-lede">{e(en(pj["lede"]))}</p>
-      <dl class="cp-count"><div><dt>Clients listed</dt><dd>{n_clients}</dd></div><div><dt>Sectors</dt><dd>{len(pj["groups"])}</dd></div></dl></div>
-  </div>
-</section>
-<div class="c-wrap cp-list">{rows}</div>
-<section class="c-close" aria-labelledby="close-t">
-  <div class="c-wrap">
-    <h2 id="close-t" class="c-display c-close-t">{e(en(pj["next"]))}</h2>
-    <ul class="c-paths">
-      <li><a href="/contact/"><b>Request a quotation</b><span>You know what you need. Send the space, the ages and your shortlist.</span><i>{ARROW}</i></a></li>
-      <li><a href="/contact/?type=Not%20sure%20yet"><b>Discuss a custom project</b><span>A theme, an unusual footprint or a whole destination. Start with the brief.</span><i>{ARROW}</i></a></li>
-      <li><a href="/downloads/dupedia-playground-catalogue.pdf"><b>Download the catalogue</b><span>All five playground collections with sizes and safety zones. PDF, 7&nbsp;MB.</span><i>{ARROW}</i></a></li>
-    </ul>
-  </div>
-</section>"""
-    page("/projects/", e(en(pj["title"])), en(pj["desc"]), body, crumbs=crumbs, active="/projects/",
-         ld=[{"@type": "CollectionPage", "name": en(pj["title"]), "url": BASE + "/projects/",
-              "about": [{"@type": "Organization", "name": c} for _, cl in pj["groups"] for c in cl]}])
+    body = (phero(e(en(pj["kicker"])), e(en(pj["h1"][0])) + "|<em>" + e(en(pj["h1"][1])) + "</em>", e(en(pj["lede"])), crumbs=crumbs,
+                  actions=f'<a class="btn" href="/contact/" data-magnetic>Request a quote {ARROW}</a>')
+            + f'<div class="wrap">{groups}</div>' + cta_band(title=e(en(pj["next"]))))
+    page("/projects/", e(en(pj["title"])), en(pj["desc"]), body, crumbs=crumbs,
+         ld=[{"@type": "CollectionPage", "name": en(pj["title"]), "url": BASE + "/projects/"}])
 
 SOL_LINKS = "".join(f'<li><a href="/{x["slug"]}/">{e(x["kicker"][0])}</a></li>' for x in LANDING["pages"]) + '<li><a href="/projects/">Projects</a></li>'
 
@@ -1576,13 +1542,12 @@ def write_static():
     shutil.copy(SRC / "assets" / "site.css", OUT / "assets" / "site.css")
     shutil.copy(SRC / "assets" / "site.js", OUT / "assets" / "site.js")
     shutil.copy(SRC / "assets" / "motion.js", OUT / "assets" / "motion.js")
-    for name in ("claude.css", "claude.js", "premium.css", "premium.js", "brand-stories.css", "brand-stories.js", "playground-3d.js", "creative-process.js", "product-presentation.js", "photo-materials.js", "division-heroes.js", "careers.js", "product-models.js", "product-viewer.js"):
+    for name in ("premium.css", "premium.js", "brand-stories.css", "brand-stories.js", "playground-3d.js", "creative-process.js", "product-presentation.js", "photo-materials.js", "division-heroes.js", "careers.js", "product-models.js", "product-viewer.js"):
         shutil.copy(SRC / "assets" / name, OUT / "assets" / name)
         if name.endswith(".js"):
             asset = OUT / "assets" / name
             asset.write_text(asset.read_text().replace("./product-models.js\'", "./product-models.js?v=" + ver(SRC / "assets" / "product-models.js") + "\'"))
     shutil.copytree(SRC / "assets" / "vendor", OUT / "assets" / "vendor", dirs_exist_ok=True)
-    shutil.copytree(SRC / "assets" / "fonts", OUT / "assets" / "fonts", dirs_exist_ok=True)
     (OUT / "assets" / "catalog.js").write_text(CATALOG)
 
 def write_meta():

@@ -90,3 +90,10 @@ body.intro-playing{overflow:hidden}.dp-intro{position:fixed;inset:0;z-index:500;
 [dir=rtl] .division-hero h1,[dir=rtl] .careers-page h1,[dir=rtl] .careers-page h2{letter-spacing:0;line-height:1.25}[dir=rtl] .careers-page p,[dir=rtl] .division-hero-lede{line-height:1.8}
 @media(max-width:760px){[dir=rtl] .division-hero h1{font-size:37px}[dir=rtl] .careers-hero h1{font-size:39px}}
 @media(prefers-reduced-motion:reduce){.photo-material-pin,.photo-material-tooltip{transition:none!important}.division-hero img,.career-blocks,.career-blocks i{transform:none!important}}
+
+/* Employee access stays beside the language switch at every screen size. */
+.header-employee{display:inline-flex;align-items:center;min-height:44px;font-size:12px;line-height:1.2;white-space:nowrap;text-decoration:none;color:inherit;flex:none}
+.header-employee:hover{text-decoration:underline;text-underline-offset:4px}
+@media(max-width:1180px){.hdr .nav,.hdr-act>.btn,.header-careers{display:none}.hdr .burger{display:flex}.hdr-act{margin-inline-start:auto}}
+@media(max-width:760px){.hdr-in{gap:10px}.hdr-logo img{width:100px}.hdr-act{gap:6px}.header-employee{font-size:11px}.hdr-act .sl-pill{display:none}}
+@media(max-width:360px){.hdr-logo img{width:84px}.hdr-in{gap:8px}.hdr-act{gap:4px}.header-employee{font-size:10px}}
