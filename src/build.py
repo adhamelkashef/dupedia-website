@@ -187,11 +187,12 @@ def crumbs_ld(items):
         {"@type": "ListItem", "position": i + 1, "name": n, "item": BASE + u} for i, (n, u) in enumerate(items)]}
 
 # ------------------------------------------------------------------ layout
+EMPLOYEE_ACCESS_URL = CFG["employeeAccessUrl"]
 NAV = [("Products", "/playgrounds/"), ("Solutions", "/what-we-build/"), ("Our factory", "/our-factory/"), ("Projects", "/projects/"), ("About", "/about/")]
 
 def header(active):
     links = "".join(f'<a href="{u}"{CUR if active == u else ""}>{n}</a>' for n, u in NAV)
-    sheet_links = "".join(f'<a href="{u}"{CUR if active == u else ""}>{n}{ARROW}</a>' for n, u in NAV + [("Careers", "/careers/"), ("Contact", "/contact/")])
+    sheet_links = "".join(f'<a href="{u}"{CUR if active == u else ""}>{n}{ARROW}</a>' for n, u in NAV + [("Careers", "/careers/"), ("Contact", "/contact/"), ("Employee access", EMPLOYEE_ACCESS_URL)])
     return f'''<a class="skip" href="#main">Skip to content</a>
 <header class="hdr">
   <div class="wrap hdr-in">
@@ -199,7 +200,7 @@ def header(active):
     <nav class="nav" aria-label="Main">{links}</nav>
     <div class="hdr-act">
       <a class="sl-pill" href="/contact/" data-sl-count hidden><span class="ball" aria-hidden="true"></span>Shortlist <span class="n">0</span></a>
-      <a class="header-careers" href="/careers/">Careers</a><a class="btn btn-s" href="/contact/">Request a quote</a>
+      <a class="header-careers employee-access" href="{e(EMPLOYEE_ACCESS_URL)}">Employee access</a><a class="header-careers" href="/careers/">Careers</a><a class="btn btn-s" href="/contact/">Request a quote</a>
       <button class="burger" type="button" aria-expanded="false" aria-controls="sheet" aria-label="Open menu"><span></span><span></span><span></span></button>
     </div>
   </div>
@@ -228,7 +229,7 @@ def footer():
         <img src="/brand/dupedia-logo-white.png" width="1570" height="346" alt="Dupedia" loading="lazy">
         <p class="brandline"><span>Serious about <em>play.</em></span></p>
       </div>
-      <div><h2>Explore</h2><ul>{"".join(f'<li><a href="{u}">{n}</a></li>' for n, u in NAV)}<li><a href="/careers/">Careers</a></li><li><a href="/contact/">Contact</a></li></ul></div>
+      <div><h2>Explore</h2><ul>{"".join(f'<li><a href="{u}">{n}</a></li>' for n, u in NAV)}<li><a href="/careers/">Careers</a></li><li><a href="/contact/">Contact</a></li><li><a href="{e(EMPLOYEE_ACCESS_URL)}">Employee access</a></li></ul></div>
       <div><h2>Solutions</h2><ul>{SOL_LINKS}</ul></div>
       <div><h2>Playground collections</h2><ul>{colls}<li><a href="/downloads/dupedia-playground-catalogue.pdf">Catalogue (PDF, 7&nbsp;MB)</a></li></ul></div>
       <div><h2>Contact</h2><ul><li><a href="/contact/">Request a quote</a></li><li>{contact_line("email")}</li><li>{contact_line("phone")}</li><li>{contact_line("address")}</li>{social}</ul></div>

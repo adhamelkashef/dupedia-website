@@ -317,3 +317,6 @@ html body .field :is(input, select, textarea):focus { outline: none; border-colo
 html body .field [aria-invalid="true"] { border-color: #B3261E; }
 html body .req { font-style: normal; font-weight: 500; color: var(--c-ink-3); }
 html body .form-err { color: #B3261E; font-weight: 600; }
+
+/* Keep the employee shortcut in the menu and footer on smaller screens. */
+@media (max-width: 1200px) { html body .hdr-act .employee-access { display: none; } }
