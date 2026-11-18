@@ -1,58 +1,6 @@
-/* A scroll-led brand assembly and connected project workflow. No private app data. */
-(() => {
- 'use strict';
- const section=document.querySelector('.xos-section');
- if(!section)return;
- const steps=[...section.querySelectorAll('[data-xos-step]')];
- const buttons=[...section.querySelectorAll('[data-xos-select]')];
- const details=[...section.querySelectorAll('.xos-detail')];
- let active=0,trigger=null;
- function select(index){
-  index=Math.max(0,Math.min(steps.length-1,index));
-  active=index;
-  steps.forEach((el,i)=>{el.classList.toggle('is-current',i===index);el.classList.toggle('is-complete',i<index);});
-  buttons.forEach((el,i)=>{if(i===index)el.setAttribute('aria-current','step');else el.removeAttribute('aria-current');});
-  details.forEach((el,i)=>{el.hidden=i!==index;});
- }
- buttons.forEach((button,i)=>button.addEventListener('click',()=>{
-  select(i);
-  if(trigger?.isActive&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
-   window.scrollTo({top:trigger.start+(trigger.end-trigger.start)*(.28+i*.17),behavior:'smooth'});
-  }
- }));
- if(!window.gsap||!window.ScrollTrigger)return;
- gsap.registerPlugin(ScrollTrigger);
- const mm=gsap.matchMedia();
- mm.add({motion:'(prefers-reduced-motion: no-preference)',wide:'(min-width:1000px) and (min-height:740px)',phone:'(max-width:640px)'},context=>{
-  if(!context.conditions.motion)return;
-  const {wide,phone}=context.conditions;
-  const original=section.querySelector('.xos-logo-original');
-  const pieces=[...section.querySelectorAll('.xos-piece')];
-  const line=section.querySelector('.xos-line>i');
-  const decoration=section.querySelectorAll('.xos-orbit i');
-  section.classList.add('xos-motion');
-  gsap.set(original,{opacity:0});
-  const assembly=gsap.timeline({defaults:{ease:'power3.out',duration:.8}});
-  assembly.fromTo(pieces,{x:i=>[-90,-32,0,35,100][i],y:i=>[35,-38,48,-35,25][i],rotation:i=>[-14,9,-7,11,-12][i],autoAlpha:0},{x:0,y:0,rotation:0,autoAlpha:1,stagger:.08},0)
-   .fromTo(decoration,{scale:.2,autoAlpha:0,rotation:-40},{scale:1,autoAlpha:1,rotation:0,stagger:.08},.08)
-   .to(original,{opacity:1,duration:.1},1.15).to(pieces,{opacity:0,duration:.1},1.15);
-  if(wide){
-   section.classList.add('xos-is-pinned');
-   const state={phase:0};
-   const story=gsap.timeline({defaults:{ease:'none',duration:1},scrollTrigger:{id:'xforce-story',trigger:section,start:'top top+=72',end:'+=1500',pin:section.querySelector('.xos-pin'),scrub:.65,invalidateOnRefresh:true,refreshPriority:5,onUpdate:self=>{const index=Math.min(4,Math.max(0,Math.floor((self.progress-.25)/.17)));if(index!==active)select(index);}}});
-   story.add(assembly,0)
-    .fromTo(line,{scaleX:0},{scaleX:1,duration:3.2},1.05)
-    .to(state,{phase:1,duration:.3},4.25);
-   trigger=story.scrollTrigger;
-  }else{
-   ScrollTrigger.create({trigger:section.querySelector('.xos-logo-wrap'),start:'top 88%',animation:assembly,toggleActions:'play none none reverse'});
-   gsap.fromTo(line,phone?{scaleY:0}:{scaleX:0},{...(phone?{scaleY:1}:{scaleX:1}),ease:'none',scrollTrigger:{trigger:section.querySelector('.xos-workflow'),start:'top 75%',end:'bottom 55%',scrub:.5}});
-   steps.forEach((el,i)=>ScrollTrigger.create({trigger:el,start:phone?'top 65%':'top 72%',onEnter:()=>select(i),onEnterBack:()=>select(i)}));
-  }
-  const refresh=()=>ScrollTrigger.refresh();
-  addEventListener('dp:intro-end',refresh);
-  return()=>{trigger=null;section.classList.remove('xos-motion','xos-is-pinned');removeEventListener('dp:intro-end',refresh);select(0);};
- },section);
- addEventListener('load',()=>{ScrollTrigger.sort();ScrollTrigger.refresh();},{once:true});
- document.fonts?.ready.then(()=>ScrollTrigger.refresh());
-})();
+(()=>{'use strict';const root=document.querySelector('.xos-section');if(!root)return;const scenes=[...root.querySelectorAll('.xos-scene')],tabs=[...root.querySelectorAll('[data-scene]')],pause=root.querySelector('.xos-pause'),bar=root.querySelector('.xos-progress i'),reduced=matchMedia('(prefers-reduced-motion: reduce)'),ar=document.documentElement.lang.startsWith('ar');let film,visible=false,paused=false,finished=false;
+function motionPause(stop){if(window.gsap)gsap.getTweensOf(root.querySelectorAll(".xos-scene,.xos-scene *, .xos-progress i")).forEach(t=>stop?t.pause():t.resume());}
+function label(){pause.textContent=paused?(ar?'متابعة الحركة':'Resume animation'):(ar?'إيقاف الحركة':'Pause animation');pause.setAttribute('aria-pressed',String(paused))}
+function show(i,animate=true){scenes.forEach((s,n)=>s.hidden=n!==i);tabs.forEach((b,n)=>{if(n===i)b.setAttribute('aria-current','true');else b.removeAttribute('aria-current')});if(!window.gsap||reduced.matches||!animate)return;const s=scenes[i];gsap.fromTo(s,{clipPath:'inset(0 0 100% 0)'},{clipPath:'inset(0% 0% 0% 0%)',duration:.65,ease:'power4.inOut',overwrite:true});gsap.fromTo(s.querySelectorAll('h2,h3,p'),{y:75,opacity:0},{y:0,opacity:1,duration:1,stagger:.12,ease:'power3.out',overwrite:true});if(i===0)gsap.fromTo(s.querySelector('img'),{x:160,y:90,scale:.65,rotation:15},{x:0,y:0,scale:1,rotation:-3,duration:4,ease:'power3.out',overwrite:true});if(i===1)gsap.fromTo(s.querySelector('img'),{scale:3,rotation:-15,opacity:0},{scale:1,rotation:0,opacity:1,duration:1.6,ease:'expo.out',overwrite:true});if(i===2)gsap.fromTo(s.querySelectorAll('span'),{x:n=>n%2?-500:500,opacity:0},{x:0,opacity:1,duration:1.3,stagger:.2,ease:'expo.out',overwrite:true});if(i===3)gsap.fromTo(s.querySelector('img'),{scale:1.2},{scale:1,duration:5,ease:'none',overwrite:true});if(i===4){gsap.fromTo(s.querySelectorAll('h3 span'),{x:-140,opacity:0},{x:0,opacity:1,duration:.9,stagger:.3,ease:'power4.out',overwrite:true});gsap.fromTo(s.querySelector('img'),{scale:.3,rotation:30,opacity:0},{scale:1,rotation:-8,opacity:1,duration:1.4,delay:.6,ease:'back.out(1.3)',overwrite:true})}}
+function build(){film?.kill();finished=false;show(0,false);bar.style.transform='scaleX(0)';if(!window.gsap||reduced.matches)return;film=gsap.timeline({paused:true,onComplete:()=>finished=true});for(let i=0;i<5;i++)film.call(()=>show(i),[],i*5.2);film.fromTo(bar,{scaleX:0},{scaleX:1,duration:26,ease:'none'},0);if(visible&&!paused)film.play()}
+tabs.forEach((b,i)=>b.addEventListener('click',()=>{paused=true;film?.pause();show(i);label()}));pause.addEventListener('click',()=>{paused=!paused;if(!paused&&finished)build();if(paused)film?.pause();else if(visible)film?.play();motionPause(paused);label()});root.querySelector('.xos-replay').addEventListener('click',()=>{paused=false;build();show(0);label()});new IntersectionObserver(e=>{visible=e[0].isIntersecting;if(visible&&!paused)film?.play();else film?.pause();motionPause(!visible||paused)},{threshold:.35}).observe(root.querySelector('.xos-film'));document.addEventListener('visibilitychange',()=>{if(document.hidden)film?.pause();else if(visible&&!paused)film?.play();motionPause(document.hidden||!visible||paused)});reduced.addEventListener('change',build);build();label();})();

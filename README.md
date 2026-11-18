@@ -94,3 +94,5 @@ Responsive Arabic layouts and reduced-motion static layouts are included. Local 
 The Codex homepage includes a bilingual X FORCE section immediately after the pirate-ship assembly. The supplied X FORCE logo assembles on scroll, followed by five connected workflow stages with selectable customer-benefit details. Desktop uses a pinned scroll sequence; phones use a vertical workflow. Reduced-motion preferences display a static logo and workflow. Employee access remains immediately beside the language switch.
 
 Source: `src/xforce_story.py`, `src/assets/xforce-story.css` and `src/assets/xforce-story.js`. The supplied logo is preserved in `static/brand/xforce-endorsed-black.png`. The section describes the operations workflow and AI-assisted research; it does not expose live account data or claim a verified market-first status.
+
+The X FORCE home section is a five-scene, finite kinetic brand film with viewport playback, scene navigation, pause/replay, and reduced-motion support in English and Arabic.
