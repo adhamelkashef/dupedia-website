@@ -296,12 +296,14 @@ def page(path, title, desc, body, active=None, ld=None, catalog=False, og_image=
 <link rel="stylesheet" href="{FONT_SIG}">
 <link rel="stylesheet" href="/assets/site.css?v={CSS_V}">
 <link rel="stylesheet" href="/assets/premium.css?v={ver(SRC / "assets" / "premium.css")}">
+{'<link rel="stylesheet" href="/assets/xforce-story.css?v=' + ver(SRC / "assets" / "xforce-story.css") + '">' if path == "/" else ""}
 <script>document.documentElement.classList.add("js");window.DP_CONFIG={json.dumps(cfg)};{INTRO_JS if intro else ""}</script>
 {'<script src="/assets/catalog.js?v=' + CAT_V + '" defer></script>' if catalog else ""}
 <script src="/assets/site.js?v={JS_V}" defer></script>
 <script src="/assets/vendor/gsap.min.js" defer></script>
 <script src="/assets/vendor/ScrollTrigger.min.js" defer></script>
 <script src="/assets/premium.js?v={ver(SRC / "assets" / "premium.js")}" defer></script>
+{'<script src="/assets/xforce-story.js?v=' + ver(SRC / "assets" / "xforce-story.js") + '" defer></script>' if path == "/" else ""}
 {'<script type="module" src="/assets/playground-3d.js?v=' + ver(SRC / "assets" / "playground-3d.js") + '"></script><script type="module" src="/assets/creative-process.js?v=' + ver(SRC / "assets" / "creative-process.js") + '"></script>' if path == "/" else ""}
 {'<script type="module" src="/assets/product-viewer.js?v=' + ver(SRC / "assets" / "product-viewer.js") + '"></script><script src="/assets/photo-materials.js?v=' + ver(SRC / "assets" / "photo-materials.js") + '" defer></script><script src="/assets/product-presentation.js?v=' + ver(SRC / "assets" / "product-presentation.js") + '" defer></script>' if path.startswith("/playgrounds/sw-") else ""}
 {'<link rel="stylesheet" href="/assets/brand-stories.css?v=' + ver(SRC / "assets" / "brand-stories.css") + '"><script src="/assets/brand-stories.js?v=' + ver(SRC / "assets" / "brand-stories.js") + '" defer></script>' if path in ('/about/', '/our-factory/', '/projects/') else ""}
@@ -1542,7 +1544,7 @@ def write_static():
     shutil.copy(SRC / "assets" / "site.css", OUT / "assets" / "site.css")
     shutil.copy(SRC / "assets" / "site.js", OUT / "assets" / "site.js")
     shutil.copy(SRC / "assets" / "motion.js", OUT / "assets" / "motion.js")
-    for name in ("premium.css", "premium.js", "brand-stories.css", "brand-stories.js", "playground-3d.js", "creative-process.js", "product-presentation.js", "photo-materials.js", "division-heroes.js", "careers.js", "product-models.js", "product-viewer.js"):
+    for name in ("xforce-story.css", "xforce-story.js", "premium.css", "premium.js", "brand-stories.css", "brand-stories.js", "playground-3d.js", "creative-process.js", "product-presentation.js", "photo-materials.js", "division-heroes.js", "careers.js", "product-models.js", "product-viewer.js"):
         shutil.copy(SRC / "assets" / name, OUT / "assets" / name)
         if name.endswith(".js"):
             asset = OUT / "assets" / name

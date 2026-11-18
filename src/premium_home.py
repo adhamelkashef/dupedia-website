@@ -96,4 +96,5 @@ def render_home(g, fit):
 
       <p class="creative-disclaimer">An illustrative journey through our creative process. Concept visuals are not construction drawings.</p>
     </section>'''
-    return hero+nav+intro+creative+story+products+worlds+planning+ceo+behind+finish
+    from xforce_story import render_xforce
+    return hero+render_xforce(g)+nav+intro+creative+story+products+worlds+planning+ceo+behind+finish

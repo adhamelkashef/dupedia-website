@@ -87,3 +87,10 @@ About, Our Factory and Projects now have distinct scroll journeys: playful shape
 Product overviews are now static. Introductory image/copy tweens, pointer tilt and finish reveals were removed; animation and the on-demand 3D viewer live in the Idea / Details / Your Space story. The viewer supports raycast hover/tap on parts and keyboard-accessible material buttons with highlighting. Material names describe the illustrative procedural model (wood, metal, rope, fabric); coloured components without a confirmed material are marked “Surface material to confirm.” Actual construction/material specifications require manufacturer confirmation. No grades, species or plastic types are inferred.
 
 Responsive Arabic layouts and reduced-motion static layouts are included. Local browser checks covered all three brand journeys, component picking on the ship (“Wood · Ship safety rails”), and Arabic mobile factory/material controls. Source product data remains unchanged.
+
+
+### X FORCE homepage story
+
+The Codex homepage includes a bilingual X FORCE section immediately after the pirate-ship assembly. The supplied X FORCE logo assembles on scroll, followed by five connected workflow stages with selectable customer-benefit details. Desktop uses a pinned scroll sequence; phones use a vertical workflow. Reduced-motion preferences display a static logo and workflow. Employee access remains immediately beside the language switch.
+
+Source: `src/xforce_story.py`, `src/assets/xforce-story.css` and `src/assets/xforce-story.js`. The supplied logo is preserved in `static/brand/xforce-endorsed-black.png`. The section describes the operations workflow and AI-assisted research; it does not expose live account data or claim a verified market-first status.
